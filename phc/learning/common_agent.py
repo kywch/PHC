@@ -25,7 +25,7 @@ import torch
 from torch import optim
 from gym import spaces
 
-import learning.amp_datasets as amp_datasets
+import phc.learning.amp_datasets as amp_datasets
 
 from tensorboardX import SummaryWriter
 import wandb

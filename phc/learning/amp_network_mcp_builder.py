@@ -1,7 +1,7 @@
 
 from rl_games.algos_torch import torch_ext
 from rl_games.algos_torch import layers
-from learning.amp_network_builder import AMPBuilder
+from phc.learning.amp_network_builder import AMPBuilder
 import torch
 import torch.nn as nn
 import numpy as np

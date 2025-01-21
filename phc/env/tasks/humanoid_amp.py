@@ -41,7 +41,7 @@ from torch import Tensor
 from typing import Dict, Optional
 
 from isaacgym import gymapi
-from isaacgym import gymtorch
+# from isaacgym import gymtorch
 
 from phc.env.tasks.humanoid import Humanoid, dof_to_obs, remove_base_rot, dof_to_obs_smpl
 from phc.env.util import gym_util
@@ -117,7 +117,8 @@ class HumanoidAMP(Humanoid):
 
         self._amp_obs_demo_buf = None
 
-        data_dir = "data/smpl"
+        # data_dir = "data/smpl"
+        data_dir = "phc/data/smpl"
         
         if self.humanoid_type in ["smpl", ]:
             self.smpl_parser_n = SMPL_Parser(model_path=data_dir, gender="neutral").to(self.device)

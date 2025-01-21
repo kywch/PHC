@@ -25,6 +25,8 @@ from phc.utils.motion_lib_smpl import MotionLibSMPL as MotionLibSMPL
 from smpl_sim.smpllib.smpl_local_robot import SMPL_Robot
 from poselib.poselib.skeleton.skeleton3d import SkeletonTree
 from phc.utils.flags import flags
+from phc import PHC_ROOT
+from easydict import EasyDict
 
 flags.test = True
 flags.im_eval = True
@@ -61,7 +63,7 @@ robot_cfg = {
 }
 smpl_robot = SMPL_Robot(
     robot_cfg,
-    data_dir="data/smpl",
+    data_dir=PHC_ROOT / "phc/data/smpl",
 )
 
 gender_beta = np.array([1.0000, -0.2141, -0.1140, 0.3848, 0.9583, 1.7619, 1.5040, 0.5765, 0.9636, 0.2636, -0.4202, 0.5075, -0.7371, -2.6490, 0.0867, 1.4699, -1.1865])
@@ -193,7 +195,8 @@ for body_name in key_body_names:
 gym.prepare_sim(sim)
 body_ids = np.array(body_ids)
 
-motion_file = "data/amass/pkls/amass_isaac_im_patch_upright_slim.pkl"
+motion_file = "sample_data/amass_isaac_standing_upright_slim.pkl"
+# motion_file = "data/amass/pkls/amass_isaac_im_patch_upright_slim.pkl"
 # motion_file = "data/amass/pkls/amass_isaac_im_train_upright_slim.pkl"
 # motion_file = "data/amass/pkls/amass_isaac_locomotion_upright.pkl"
 # motion_file = "data/amass/pkls/amass_isaac_slowalk_upright.pkl"
@@ -233,7 +236,20 @@ else:
 
 device = (torch.device("cuda", index=0) if torch.cuda.is_available() else torch.device("cpu"))
 
-motion_lib = MotionLibSMPL(motion_file=motion_file, key_body_ids=body_ids, device=device, masterfoot_conifg=_masterfoot_config, fix_height=False, multi_thread=False)
+cfg = EasyDict({
+    "motion_file": motion_file,
+    "key_body_ids": body_ids,
+    "device": device,
+    "masterfoot_conifg": _masterfoot_config,
+    "fix_height": False,
+    "multi_thread": False,
+    "min_length": 5,
+    "max_length": 100,
+    "im_eval": True,
+})
+
+# motion_lib = MotionLibSMPL(**{motion_file=motion_file, key_body_ids=body_ids, device=device, _masterfoot_config=_masterfoot_config, fix_height=False, multi_thread=False})
+motion_lib = MotionLibSMPL(cfg)
 num_motions = 30
 curr_start = 0
 motion_lib.load_motions(skeleton_trees=[sk_tree] * num_motions, gender_betas=[torch.zeros(17)] * num_motions, limb_weights=[np.zeros(10)] * num_motions, random_sample=False)

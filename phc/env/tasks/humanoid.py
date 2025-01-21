@@ -33,7 +33,8 @@ import os
 import torch
 import multiprocessing
 
-from isaacgym import gymtorch
+# from isaacgym import gymtorch
+import gymtorch
 from isaacgym import gymapi
 from isaacgym.torch_utils import *
 import joblib
@@ -41,6 +42,8 @@ from phc.utils import torch_utils
 
 from smpl_sim.smpllib.smpl_joint_names import SMPL_MUJOCO_NAMES, SMPLH_MUJOCO_NAMES
 from smpl_sim.smpllib.smpl_local_robot import SMPL_Robot
+
+from phc import PHC_ROOT
 
 from phc.utils.flags import flags
 from phc.env.tasks.base_task import BaseTask
@@ -131,7 +134,7 @@ class Humanoid(BaseTask):
         return
 
     def _load_proj_asset(self):
-        asset_root = "phc/data/assets/urdf/"
+        asset_root = PHC_ROOT / "phc/data/assets/urdf/"
 
         small_asset_file = "block_projectile.urdf"
         # small_asset_file = "ball_medium.urdf"
@@ -800,10 +803,13 @@ class Humanoid(BaseTask):
                 "model": self.humanoid_type,
                 "sim": "isaacgym"
             }
-            if os.path.exists("data/smpl"):
+
+            # CHECK ME: hard-coded SMPL model location. Is it right?
+            smpl_dir = PHC_ROOT / "phc/data/smpl"
+            if os.path.exists(smpl_dir):
                 robot = SMPL_Robot(
                     robot_cfg,
-                    data_dir="data/smpl",
+                    data_dir=smpl_dir,
                 )
             else:
                 print("!!!!!!! SMPL files not found, loading pre-computed humanoid assets, only for demo purposes !!!!!!!")

@@ -54,16 +54,16 @@ import copy
 import torch
 import wandb
 
-from learning import im_amp
-from learning import im_amp_players
-from learning import amp_agent
-from learning import amp_players
-from learning import amp_models
-from learning import amp_network_builder
-from learning import amp_network_mcp_builder
-from learning import amp_network_pnn_builder
+from phc.learning import im_amp
+from phc.learning import im_amp_players
+from phc.learning import amp_agent
+from phc.learning import amp_players
+from phc.learning import amp_models
+from phc.learning import amp_network_builder
+from phc.learning import amp_network_mcp_builder
+from phc.learning import amp_network_pnn_builder
 
-from env.tasks import humanoid_amp_task
+from phc.env.tasks import humanoid_amp_task
 import hydra
 from omegaconf import DictConfig, OmegaConf
 from easydict import EasyDict

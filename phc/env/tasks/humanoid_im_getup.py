@@ -29,13 +29,14 @@
 import torch
 
 from isaacgym import gymapi
-from isaacgym import gymtorch
+# from isaacgym import gymtorch
+import gymtorch
 
 from phc.env.util import gym_util
 from phc.env.tasks.humanoid_im import HumanoidIm
 from isaacgym.torch_utils import *
 
-from utils import torch_utils
+# from utils import torch_utils
 from phc.utils.flags import flags
 
 

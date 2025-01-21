@@ -12,7 +12,7 @@ from phc.utils.flags import flags
 from rl_games.algos_torch import torch_ext
 from rl_games.common.player import BasePlayer
 
-import learning.amp_players as amp_players
+import phc.learning.amp_players as amp_players
 from tqdm import tqdm
 import joblib
 import time

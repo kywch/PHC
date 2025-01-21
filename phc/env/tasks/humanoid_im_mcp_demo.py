@@ -11,7 +11,8 @@ from phc.utils.motion_lib_smpl import MotionLibSMPL
 from phc.utils import torch_utils
 
 from isaacgym import gymapi
-from isaacgym import gymtorch
+# from isaacgym import gymtorch
+import gymtorch
 from isaacgym.torch_utils import *
 from phc.utils.flags import flags
 import joblib

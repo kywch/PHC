@@ -23,7 +23,7 @@ import torch
 from torch import nn
 from phc.env.tasks.humanoid_amp_task import HumanoidAMPTask
 
-import learning.replay_buffer as replay_buffer
+import phc.learning.replay_buffer as replay_buffer
 import phc.learning.amp_agent as amp_agent
 from phc.utils.flags import flags
 from rl_games.common.tr_helpers import unsqueeze_obs
