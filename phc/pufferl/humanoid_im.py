@@ -1,5 +1,6 @@
 import copy
 import os.path as osp
+from enum import Enum
 from typing import OrderedDict
 
 from datetime import datetime
@@ -37,6 +38,7 @@ from phc.pufferl.torch_utils import (
 # TODO: remove these
 from phc.utils.flags import flags
 from phc.env.tasks.humanoid_amp import HumanoidAMP
+from phc.env.tasks.humanoid import Humanoid
 
 # NOTE: testing single-file poselib and motionlib
 # from phc.utils.motion_lib_real import MotionLibReal
@@ -48,7 +50,14 @@ from phc.pufferl.motion_lib import MotionLibSMPL, FixHeightMode
 # from phc.pufferl.poselib_skeleton import SkeletonState
 
 
-class HumanoidIm(HumanoidAMP):
+class StateInit(Enum):
+    Default = 0
+    Start = 1
+    Random = 2
+    Hybrid = 3
+
+
+class HumanoidIm(Humanoid):
     def __init__(self, cfg, sim_params, physics_engine, device_type, device_id, headless):
         self._full_body_reward = cfg["env"].get("full_body_reward", True)
         self._fut_tracks = cfg["env"].get("fut_tracks", False)
@@ -95,8 +104,6 @@ class HumanoidIm(HumanoidAMP):
 
         self._full_track_bodies_id = self._build_key_body_ids_tensor(self._full_track_bodies)
         self._eval_track_bodies_id = self._build_key_body_ids_tensor(self._eval_bodies)
-        self._motion_start_times_offset = torch.zeros(self.num_envs).to(self.device)
-        self._cycle_counter = torch.zeros(self.num_envs, device=self.device, dtype=torch.int)
 
         # if "extend_config" in cfg.robot:
         #     extend_names, extend_pos, extend_rot = [], [], []
@@ -130,6 +137,19 @@ class HumanoidIm(HumanoidAMP):
         ).long()
         #################### Devs ####################
 
+        # From HumanoidAmp
+        state_init = cfg["env"]["stateInit"]
+        self._state_init = StateInit[state_init]
+        self._hybrid_init_prob = cfg["env"]["hybridInitProb"]
+
+        assert self.amp_obs_v == 1, "amp_obs_v must be 1"
+        self._num_amp_obs_steps = cfg["env"]["numAMPObsSteps"]
+        self._amp_root_height_obs = (
+            True  # cfg["env"].get("ampRootHeightObs", cfg["env"].get("root_height_obs", True))
+        )
+
+        #####################################################
+
         super().__init__(
             cfg=cfg,
             sim_params=sim_params,
@@ -156,7 +176,31 @@ class HumanoidIm(HumanoidAMP):
 
         self.vis_ref = True
         self.vis_contact = False
+
+        # AMP-related
+        self._reset_default_env_ids = []
+        self._reset_ref_env_ids = []
+        self._state_reset_happened = False
+
+        self._motion_start_times = torch.zeros(self.num_envs).to(self.device)
+        self._motion_start_times_offset = torch.zeros(self.num_envs).to(self.device)
+        self._cycle_counter = torch.zeros(self.num_envs, device=self.device, dtype=torch.int)
+
         self._sampled_motion_ids = torch.arange(self.num_envs).to(self.device)
+        motion_file = cfg["env"]["motion_file"]
+        self._load_motion(motion_file)
+        self.ref_motion_cache = {}
+
+        # Need _num_amp_obs_per_step to be initialized from self._setup_character_props()
+        self._amp_obs_buf = torch.zeros(
+            (self.num_envs, self._num_amp_obs_steps, self._num_amp_obs_per_step),
+            device=self.device,
+            dtype=torch.float,
+        )
+        self._curr_amp_obs_buf = self._amp_obs_buf[:, 0]
+        self._hist_amp_obs_buf = self._amp_obs_buf[:, 1:]
+
+        self._amp_obs_demo_buf = None
 
     def pause_func(self, action):
         self.paused = not self.paused
@@ -179,6 +223,124 @@ class HumanoidIm(HumanoidAMP):
     # NOTE: check the arg i
     def render(self, sync_frame_time=False, i=0):
         super().render(sync_frame_time=sync_frame_time)
+
+    ####################################################################
+
+    def get_num_amp_obs(self):
+        return self._num_amp_obs_steps * self._num_amp_obs_per_step
+
+    def fetch_amp_obs_demo(self, num_samples):
+        # Creates the reference motion amp obs. For discrinminiator
+
+        if self._amp_obs_demo_buf is None:
+            self._build_amp_obs_demo_buf(num_samples)
+        else:
+            assert self._amp_obs_demo_buf.shape[0] == num_samples
+
+        motion_ids = self._motion_lib.sample_motions(num_samples)
+        motion_times0 = self._sample_time(motion_ids)
+        amp_obs_demo = self.build_amp_obs_demo(motion_ids, motion_times0)
+        self._amp_obs_demo_buf[:] = amp_obs_demo.view(self._amp_obs_demo_buf.shape)
+        amp_obs_demo_flat = self._amp_obs_demo_buf.view(-1, self.get_num_amp_obs())
+
+        return amp_obs_demo_flat
+
+    def build_amp_obs_demo(self, motion_ids, motion_times0):
+        # Compute observation for the motion starting point
+        dt = self.dt
+        motion_ids = torch.tile(motion_ids.unsqueeze(-1), [1, self._num_amp_obs_steps])
+
+        motion_times = motion_times0.unsqueeze(-1)
+        time_steps = -dt * torch.arange(0, self._num_amp_obs_steps, device=self.device)
+        motion_times = motion_times + time_steps
+
+        motion_ids = motion_ids.view(-1)
+        motion_times = motion_times.view(-1)
+
+        motion_res = self._get_state_from_motionlib_cache(motion_ids, motion_times)
+
+        (
+            root_pos,
+            root_rot,
+            dof_pos,
+            root_vel,
+            root_ang_vel,
+            dof_vel,
+            smpl_params,
+            limb_weights,
+            pose_aa,
+            rb_pos,
+            rb_rot,
+            body_vel,
+            body_ang_vel,
+        ) = (
+            motion_res["root_pos"],
+            motion_res["root_rot"],
+            motion_res["dof_pos"],
+            motion_res["root_vel"],
+            motion_res["root_ang_vel"],
+            motion_res["dof_vel"],
+            motion_res["motion_bodies"],
+            motion_res["motion_limb_weights"],
+            motion_res["motion_aa"],
+            motion_res["rg_pos"],
+            motion_res["rb_rot"],
+            motion_res["body_vel"],
+            motion_res["body_ang_vel"],
+        )
+
+        key_pos = rb_pos[:, self._key_body_ids]
+        key_vel = body_vel[:, self._key_body_ids]
+        amp_obs_demo = self._compute_amp_observations_from_state(
+            root_pos,
+            root_rot,
+            root_vel,
+            root_ang_vel,
+            dof_pos,
+            dof_vel,
+            key_pos,
+            key_vel,
+            smpl_params,
+            limb_weights,
+            self.dof_subset,
+            self._local_root_obs,
+            self._amp_root_height_obs,
+            self._has_dof_subset,
+            self._has_shape_obs_disc,
+            self._has_limb_weight_obs_disc,
+            self._has_upright_start,
+        )
+
+        # if self._add_amp_input_noise:
+        #     amp_obs_demo = amp_obs_demo + torch.randn_like(amp_obs_demo) * 0.01
+
+        return amp_obs_demo
+
+    def _build_amp_obs_demo_buf(self, num_samples):
+        self._amp_obs_demo_buf = torch.zeros(
+            (num_samples, self._num_amp_obs_steps, self._num_amp_obs_per_step),
+            device=self.device,
+            dtype=torch.float32,
+        )
+        return
+
+    def _setup_character_props(self, key_bodies):
+        super()._setup_character_props(key_bodies)
+        num_key_bodies = len(key_bodies)
+
+        assert self.humanoid_type == "smpl"
+        assert self.amp_obs_v == 1
+        assert self._amp_root_height_obs is True
+        assert self._has_dof_subset is True
+
+        self._num_amp_obs_per_step = (
+            13 + self._dof_obs_size + len(self._dof_names) * 3 + 3 * num_key_bodies
+        )  # [root_h, root_rot, root_vel, root_ang_vel, dof_pos, dof_vel, key_body_pos]
+
+        if self._has_dof_subset:
+            self._num_amp_obs_per_step -= (6 + 3) * int(
+                (len(self._dof_names) * 3 - len(self.dof_subset)) / 3
+            )
 
     def _load_motion(self, motion_train_file, motion_test_file=[]):
         assert self._dof_offsets[-1] == self.num_dof
@@ -363,13 +525,6 @@ class HumanoidIm(HumanoidAMP):
             start_idx=self.start_idx,
         )
         self.reset()
-
-    # Disabled.
-    # def get_self_obs_size(self):
-    #     if self.obs_v == 4:
-    #         return self._num_self_obs * self.past_track_steps
-    #     else:
-    #         return self._num_self_obs
 
     def get_obs_size(self):
         # TODO: remove self_obs_v from the config
@@ -579,13 +734,19 @@ class HumanoidIm(HumanoidAMP):
         return self._motion_lib.sample_time_interval(motion_ids)
         # return self._motion_lib.sample_time(motion_ids)
 
-    def _reset_task(self, env_ids):
-        super()._reset_task(env_ids)
-        # imitation task is resetted with the actions
-        return
+    # def _reset_task(self, env_ids):
+    #     super()._reset_task(env_ids)
+    #     # imitation task is resetted with the actions
+    #     return
 
     def post_physics_step(self):
         super().post_physics_step()
+
+        self._update_hist_amp_obs()  # One step for the amp obs
+        self._compute_amp_observations()
+
+        amp_obs_flat = self._amp_obs_buf.view(-1, self.get_num_amp_obs())
+        self.extras["amp_obs"] = amp_obs_flat  ## ZL: hooks for adding amp_obs for trianing
 
         if flags.im_eval:
             motion_times = (
@@ -612,6 +773,40 @@ class HumanoidIm(HumanoidAMP):
 
         return
 
+    def _set_env_state(
+        self,
+        env_ids,
+        root_pos,
+        root_rot,
+        dof_pos,
+        root_vel,
+        root_ang_vel,
+        dof_vel,
+        rigid_body_pos=None,
+        rigid_body_rot=None,
+        rigid_body_vel=None,
+        rigid_body_ang_vel=None,
+    ):
+        self._humanoid_root_states[env_ids, 0:3] = root_pos
+        self._humanoid_root_states[env_ids, 3:7] = root_rot
+        self._humanoid_root_states[env_ids, 7:10] = root_vel
+        self._humanoid_root_states[env_ids, 10:13] = root_ang_vel
+        self._dof_pos[env_ids] = dof_pos
+        self._dof_vel[env_ids] = dof_vel
+
+        if (not rigid_body_pos is None) and (not rigid_body_rot is None):
+            self._rigid_body_pos[env_ids] = rigid_body_pos
+            self._rigid_body_rot[env_ids] = rigid_body_rot
+            self._rigid_body_vel[env_ids] = rigid_body_vel
+            self._rigid_body_ang_vel[env_ids] = rigid_body_ang_vel
+
+            self._reset_rb_pos = self._rigid_body_pos[env_ids].clone()
+            self._reset_rb_rot = self._rigid_body_rot[env_ids].clone()
+            self._reset_rb_vel = self._rigid_body_vel[env_ids].clone()
+            self._reset_rb_ang_vel = self._rigid_body_ang_vel[env_ids].clone()
+
+        return
+
     def _compute_observations(self, env_ids=None):
         # env_ids is used for resetting
 
@@ -630,6 +825,213 @@ class HumanoidIm(HumanoidAMP):
         self.obs_buf[env_ids] = obs
 
         return obs
+
+    def _init_amp_obs(self, env_ids):
+        self._compute_amp_observations(env_ids)
+
+        if len(self._reset_default_env_ids) > 0:
+            self._init_amp_obs_default(self._reset_default_env_ids)
+
+        if len(self._reset_ref_env_ids) > 0:
+            self._init_amp_obs_ref(
+                self._reset_ref_env_ids, self._reset_ref_motion_ids, self._reset_ref_motion_times
+            )
+
+        return
+
+    def _init_amp_obs_default(self, env_ids):
+        curr_amp_obs = self._curr_amp_obs_buf[env_ids].unsqueeze(-2)
+        self._hist_amp_obs_buf[env_ids] = curr_amp_obs
+        return
+
+    def _init_amp_obs_ref(self, env_ids, motion_ids, motion_times):
+        dt = self.dt
+        motion_ids = torch.tile(motion_ids.unsqueeze(-1), [1, self._num_amp_obs_steps - 1])
+        motion_times = motion_times.unsqueeze(-1)
+
+        time_steps = -dt * (torch.arange(0, self._num_amp_obs_steps - 1, device=self.device) + 1)
+        motion_times = motion_times + time_steps
+
+        motion_ids = motion_ids.view(-1)
+        motion_times = motion_times.view(-1)
+
+        assert self.humanoid_type == "smpl"
+        motion_res = self._get_state_from_motionlib_cache(motion_ids, motion_times)
+        (
+            root_pos,
+            root_rot,
+            dof_pos,
+            root_vel,
+            root_ang_vel,
+            dof_vel,
+            smpl_params,
+            limb_weights,
+            pose_aa,
+            rb_pos,
+            rb_rot,
+            body_vel,
+            body_ang_vel,
+        ) = (
+            motion_res["root_pos"],
+            motion_res["root_rot"],
+            motion_res["dof_pos"],
+            motion_res["root_vel"],
+            motion_res["root_ang_vel"],
+            motion_res["dof_vel"],
+            motion_res["motion_bodies"],
+            motion_res["motion_limb_weights"],
+            motion_res["motion_aa"],
+            motion_res["rg_pos"],
+            motion_res["rb_rot"],
+            motion_res["body_vel"],
+            motion_res["body_ang_vel"],
+        )
+
+        key_pos = rb_pos[:, self._key_body_ids]
+        key_vel = body_vel[:, self._key_body_ids]
+        amp_obs_demo = self._compute_amp_observations_from_state(
+            root_pos,
+            root_rot,
+            root_vel,
+            root_ang_vel,
+            dof_pos,
+            dof_vel,
+            key_pos,
+            key_vel,
+            smpl_params,
+            limb_weights,
+            self.dof_subset,
+            self._local_root_obs,
+            self._amp_root_height_obs,
+            self._has_dof_subset,
+            self._has_shape_obs_disc,
+            self._has_limb_weight_obs_disc,
+            self._has_upright_start,
+        )
+
+        self._hist_amp_obs_buf[env_ids] = amp_obs_demo.view(self._hist_amp_obs_buf[env_ids].shape)
+
+    def _update_hist_amp_obs(self, env_ids=None):
+        if env_ids is None:
+            # CHECK ME: why do we need try/except here?
+            self._hist_amp_obs_buf[:] = self._amp_obs_buf[:, 0 : (self._num_amp_obs_steps - 1)]
+            # try:
+            #     self._hist_amp_obs_buf[:] = self._amp_obs_buf[:, 0:(self._num_amp_obs_steps - 1)]
+            # except:
+            #     self._hist_amp_obs_buf[:] = self._amp_obs_buf[:, 0:(self._num_amp_obs_steps - 1)].clone()
+        else:
+            self._hist_amp_obs_buf[env_ids] = self._amp_obs_buf[
+                env_ids, 0 : (self._num_amp_obs_steps - 1)
+            ]
+        return
+
+    def _compute_amp_observations(self, env_ids=None):
+        key_body_pos = self._rigid_body_pos[:, self._key_body_ids, :]
+        key_body_vel = self._rigid_body_vel[:, self._key_body_ids, :]
+
+        assert self.humanoid_type == "smpl"
+
+        if self.humanoid_type in ["smpl", "smplh", "smplx"] and self.dof_subset is None:
+            # ZL hack
+            (
+                self._dof_pos[:, 9:12],
+                self._dof_pos[:, 21:24],
+                self._dof_pos[:, 51:54],
+                self._dof_pos[:, 66:69],
+            ) = 0, 0, 0, 0
+            (
+                self._dof_vel[:, 9:12],
+                self._dof_vel[:, 21:24],
+                self._dof_vel[:, 51:54],
+                self._dof_vel[:, 66:69],
+            ) = 0, 0, 0, 0
+
+        if env_ids is None:
+            self._curr_amp_obs_buf[:] = self._compute_amp_observations_from_state(
+                self._rigid_body_pos[:, 0, :],
+                self._rigid_body_rot[:, 0, :],
+                self._rigid_body_vel[:, 0, :],
+                self._rigid_body_ang_vel[:, 0, :],
+                self._dof_pos,
+                self._dof_vel,
+                key_body_pos,
+                key_body_vel,
+                self.humanoid_shapes,
+                self.humanoid_limb_and_weights,
+                self.dof_subset,
+                self._local_root_obs,
+                self._amp_root_height_obs,
+                self._has_dof_subset,
+                self._has_shape_obs_disc,
+                self._has_limb_weight_obs_disc,
+                self._has_upright_start,
+            )
+        else:
+            if len(env_ids) == 0:
+                return
+
+            self._curr_amp_obs_buf[env_ids] = self._compute_amp_observations_from_state(
+                self._rigid_body_pos[env_ids][:, 0, :],
+                self._rigid_body_rot[env_ids][:, 0, :],
+                self._rigid_body_vel[env_ids][:, 0, :],
+                self._rigid_body_ang_vel[env_ids][:, 0, :],
+                self._dof_pos[env_ids],
+                self._dof_vel[env_ids],
+                key_body_pos[env_ids],
+                key_body_vel[env_ids],
+                self.humanoid_shapes[env_ids],
+                self.humanoid_limb_and_weights[env_ids],
+                self.dof_subset,
+                self._local_root_obs,
+                self._amp_root_height_obs,
+                self._has_dof_subset,
+                self._has_shape_obs_disc,
+                self._has_limb_weight_obs_disc,
+                self._has_upright_start,
+            )
+
+    def _compute_amp_observations_from_state(
+        self,
+        root_pos,
+        root_rot,
+        root_vel,
+        root_ang_vel,
+        dof_pos,
+        dof_vel,
+        key_body_pos,
+        key_body_vels,
+        smpl_params,
+        limb_weight_params,
+        dof_subset,
+        local_root_obs,
+        root_height_obs,
+        has_dof_subset,
+        has_shape_obs_disc,
+        has_limb_weight_obs,
+        upright,
+    ):
+        assert self.amp_obs_v == 1
+        assert self.humanoid_type == "smpl"
+
+        smpl_params = smpl_params[:, :-6]
+        return build_amp_observations_smpl(
+            root_pos,
+            root_rot,
+            root_vel,
+            root_ang_vel,
+            dof_pos,
+            dof_vel,
+            key_body_pos,
+            smpl_params,
+            limb_weight_params,
+            dof_subset,
+            local_root_obs,
+            root_height_obs,
+            has_dof_subset,
+            has_shape_obs_disc,
+            has_limb_weight_obs,
+            upright,
+        )
 
     def _compute_task_obs(self, env_ids=None, save_buffer=True):
         if env_ids is None:
@@ -868,24 +1270,100 @@ class HumanoidIm(HumanoidAMP):
         return
 
     def _reset_envs(self, env_ids):
+        self._reset_default_env_ids = []
+        self._reset_ref_env_ids = []
+        if len(env_ids) > 0:
+            self._state_reset_happened = True
+
         super()._reset_envs(env_ids)
+        self._init_amp_obs(env_ids)
+
         if self.collect_dataset:
             self.obs_buf_t = self.obs_buf.cpu().numpy()  # first time step update
 
-    def _reset_ref_state_init(self, env_ids):
-        self._motion_start_times_offset[env_ids] = 0  # Reset the motion time offsets
-        self._global_offset[env_ids] = 0  # Reset the global offset when resampling.
-        # self._global_offset[:, 0], self._global_offset[:, 1] = self.start_pos_x[:self.num_envs], self.start_pos_y[:self.num_envs]
+    def _reset_actors(self, env_ids):
+        if self._state_init == StateInit.Default:
+            self._reset_default(env_ids)
+        elif self._state_init == StateInit.Start or self._state_init == StateInit.Random:
+            self._reset_ref_state_init(env_ids)
+        elif self._state_init == StateInit.Hybrid:
+            self._reset_hybrid_state_init(env_ids)
+        else:
+            assert False, "Unsupported state initialization strategy: {:s}".format(
+                str(self._state_init)
+            )
+        return
 
+    def _reset_default(self, env_ids):
+        self._humanoid_root_states[env_ids] = self._initial_humanoid_root_states[env_ids]
+        self._dof_pos[env_ids] = self._initial_dof_pos[env_ids]
+        self._dof_vel[env_ids] = self._initial_dof_vel[env_ids]
+        self._reset_default_env_ids = env_ids
+        return
+
+    def _reset_ref_state_init(self, env_ids):
+        (
+            motion_ids,
+            motion_times,
+            root_pos,
+            root_rot,
+            dof_pos,
+            root_vel,
+            root_ang_vel,
+            dof_vel,
+            rb_pos,
+            rb_rot,
+            body_vel,
+            body_ang_vel,
+        ) = self._sample_ref_state(env_ids)
+
+        self._set_env_state(
+            env_ids=env_ids,
+            root_pos=root_pos,
+            root_rot=root_rot,
+            dof_pos=dof_pos,
+            root_vel=root_vel,
+            root_ang_vel=root_ang_vel,
+            dof_vel=dof_vel,
+            rigid_body_pos=rb_pos,
+            rigid_body_rot=rb_rot,
+            rigid_body_vel=body_vel,
+            rigid_body_ang_vel=body_ang_vel,
+        )
+
+        self._reset_ref_env_ids = env_ids
+        self._reset_ref_motion_ids = motion_ids
+        self._reset_ref_motion_times = motion_times
+
+        self._motion_start_times[env_ids] = motion_times
+        self._motion_start_times_offset[env_ids] = 0  # Reset the motion time offsets
+        self._sampled_motion_ids[env_ids] = motion_ids
+
+        self._global_offset[env_ids] = 0  # Reset the global offset when resampling.
         self._cycle_counter[env_ids] = 0
-        super()._reset_ref_state_init(env_ids)  # This function does not use the offset
-        # self._motion_lib.update_sampling_history(env_ids)
+
+        if flags.follow:
+            self.start = True  ## Updating camera when reset
+
+    def _reset_hybrid_state_init(self, env_ids):
+        num_envs = env_ids.shape[0]
+        ref_probs = to_torch(np.array([self._hybrid_init_prob] * num_envs), device=self.device)
+        ref_init_mask = torch.bernoulli(ref_probs) == 1.0
+
+        ref_reset_ids = env_ids[ref_init_mask]
+
+        if len(ref_reset_ids) > 0:
+            self._reset_ref_state_init(ref_reset_ids)
+
+        default_reset_ids = env_ids[torch.logical_not(ref_init_mask)]
+        if len(default_reset_ids) > 0:
+            self._reset_default(default_reset_ids)
 
     def _get_state_from_motionlib_cache(self, motion_ids, motion_times, offset=None):
         ## Cache the motion + offset
         if (
             offset is None
-            or not "motion_ids" in self.ref_motion_cache
+            or "motion_ids" not in self.ref_motion_cache
             or self.ref_motion_cache["offset"] is None
             or len(self.ref_motion_cache["motion_ids"]) != len(motion_ids)
             or len(self.ref_motion_cache["offset"]) != len(offset)
@@ -900,7 +1378,7 @@ class HumanoidIm(HumanoidAMP):
             self.ref_motion_cache["motion_times"] = (
                 motion_times.clone()
             )  # need to clone; otherwise will be overriden
-            self.ref_motion_cache["offset"] = offset.clone() if not offset is None else None
+            self.ref_motion_cache["offset"] = offset.clone() if offset is not None else None
         else:
             return self.ref_motion_cache
 
@@ -913,12 +1391,9 @@ class HumanoidIm(HumanoidAMP):
     def _sample_ref_state(self, env_ids):
         num_envs = env_ids.shape[0]
 
-        if (
-            self._state_init == HumanoidAMP.StateInit.Random
-            or self._state_init == HumanoidAMP.StateInit.Hybrid
-        ):
+        if self._state_init == StateInit.Random or self._state_init == StateInit.Hybrid:
             motion_times = self._sample_time(self._sampled_motion_ids[env_ids])
-        elif self._state_init == HumanoidAMP.StateInit.Start:
+        elif self._state_init == StateInit.Start:
             motion_times = torch.zeros(num_envs, device=self.device)
         else:
             assert False, "Unsupported state initialization strategy: {:s}".format(
@@ -980,84 +1455,84 @@ class HumanoidIm(HumanoidAMP):
             ref_body_ang_vel,
         )
 
-    def _hack_motion_sync(self):
-        if not hasattr(self, "_hack_motion_time"):
-            self._hack_motion_time = self._motion_start_times + self._motion_start_times_offset
+    # def _hack_motion_sync(self):
+    #     if not hasattr(self, "_hack_motion_time"):
+    #         self._hack_motion_time = self._motion_start_times + self._motion_start_times_offset
 
-        num_motions = self._motion_lib.num_motions()
-        motion_ids = np.arange(self.num_envs, dtype=np.int)
-        motion_ids = np.mod(motion_ids, num_motions)
-        motion_ids = torch.from_numpy(motion_ids).to(self.device)
-        # motion_ids[:] = 2
-        motion_times = self._hack_motion_time
-        if self.humanoid_type in ["h1", "smpl", "smplh", "smplx"]:
-            motion_res = self._get_state_from_motionlib_cache(
-                motion_ids, motion_times, self._global_offset
-            )
-            (
-                root_pos,
-                root_rot,
-                dof_pos,
-                root_vel,
-                root_ang_vel,
-                dof_vel,
-                smpl_params,
-                limb_weights,
-                pose_aa,
-                rb_pos,
-                rb_rot,
-                body_vel,
-                body_ang_vel,
-            ) = (
-                motion_res["root_pos"],
-                motion_res["root_rot"],
-                motion_res["dof_pos"],
-                motion_res["root_vel"],
-                motion_res["root_ang_vel"],
-                motion_res["dof_vel"],
-                motion_res["motion_bodies"],
-                motion_res["motion_limb_weights"],
-                motion_res["motion_aa"],
-                motion_res["rg_pos"],
-                motion_res["rb_rot"],
-                motion_res["body_vel"],
-                motion_res["body_ang_vel"],
-            )
+    #     num_motions = self._motion_lib.num_motions()
+    #     motion_ids = np.arange(self.num_envs, dtype=np.int)
+    #     motion_ids = np.mod(motion_ids, num_motions)
+    #     motion_ids = torch.from_numpy(motion_ids).to(self.device)
+    #     # motion_ids[:] = 2
+    #     motion_times = self._hack_motion_time
+    #     if self.humanoid_type in ["h1", "smpl", "smplh", "smplx"]:
+    #         motion_res = self._get_state_from_motionlib_cache(
+    #             motion_ids, motion_times, self._global_offset
+    #         )
+    #         (
+    #             root_pos,
+    #             root_rot,
+    #             dof_pos,
+    #             root_vel,
+    #             root_ang_vel,
+    #             dof_vel,
+    #             smpl_params,
+    #             limb_weights,
+    #             pose_aa,
+    #             rb_pos,
+    #             rb_rot,
+    #             body_vel,
+    #             body_ang_vel,
+    #         ) = (
+    #             motion_res["root_pos"],
+    #             motion_res["root_rot"],
+    #             motion_res["dof_pos"],
+    #             motion_res["root_vel"],
+    #             motion_res["root_ang_vel"],
+    #             motion_res["dof_vel"],
+    #             motion_res["motion_bodies"],
+    #             motion_res["motion_limb_weights"],
+    #             motion_res["motion_aa"],
+    #             motion_res["rg_pos"],
+    #             motion_res["rb_rot"],
+    #             motion_res["body_vel"],
+    #             motion_res["body_ang_vel"],
+    #         )
 
-            root_pos[..., -1] += 0.03  # ALways slightly above the ground to avoid issue
-        else:
-            raise ValueError(f"Unsupported humanoid type: {self.humanoid_type}")
+    #         root_pos[..., -1] += 0.03  # ALways slightly above the ground to avoid issue
+    #     else:
+    #         raise ValueError(f"Unsupported humanoid type: {self.humanoid_type}")
 
-        env_ids = torch.arange(self.num_envs, dtype=torch.long, device=self.device)
+    #     env_ids = torch.arange(self.num_envs, dtype=torch.long, device=self.device)
 
-        self._set_env_state(
-            env_ids=env_ids,
-            root_pos=root_pos,
-            root_rot=root_rot,
-            dof_pos=dof_pos,
-            root_vel=root_vel,
-            root_ang_vel=root_ang_vel,
-            dof_vel=dof_vel,
-            rigid_body_pos=rb_pos,
-            rigid_body_rot=rb_rot,
-            rigid_body_vel=body_vel,
-            rigid_body_ang_vel=body_ang_vel,
-        )
+    #     self._set_env_state(
+    #         env_ids=env_ids,
+    #         root_pos=root_pos,
+    #         root_rot=root_rot,
+    #         dof_pos=dof_pos,
+    #         root_vel=root_vel,
+    #         root_ang_vel=root_ang_vel,
+    #         dof_vel=dof_vel,
+    #         rigid_body_pos=rb_pos,
+    #         rigid_body_rot=rb_rot,
+    #         rigid_body_vel=body_vel,
+    #         rigid_body_ang_vel=body_ang_vel,
+    #     )
 
-        self._reset_env_tensors(env_ids)
-        motion_fps = self._motion_lib._motion_fps[0]
+    #     self._reset_env_tensors(env_ids)
+    #     motion_fps = self._motion_lib._motion_fps[0]
 
-        motion_dur = self._motion_lib._motion_lengths[0]
-        if not self.paused:
-            self._hack_motion_time = (
-                self._hack_motion_time + self._motion_sync_dt
-            )  # since the simulation is double
-        else:
-            pass
+    #     motion_dur = self._motion_lib._motion_lengths[0]
+    #     if not self.paused:
+    #         self._hack_motion_time = (
+    #             self._hack_motion_time + self._motion_sync_dt
+    #         )  # since the simulation is double
+    #     else:
+    #         pass
 
-        # self.progress_buf[:] = (self._hack_motion_time *  2* motion_fps).long() # /2 is for simulation double speed...
+    #     # self.progress_buf[:] = (self._hack_motion_time *  2* motion_fps).long() # /2 is for simulation double speed...
 
-        return
+    #     return
 
     def _update_cycle_count(self):
         self._cycle_counter -= 1
@@ -1298,6 +1773,97 @@ def compute_imitation_observations_v6(
     obs.append(local_ref_body_rot.view(B, time_steps, -1))  # timestep  * 24 * 6
 
     obs = torch.cat(obs, dim=-1).view(B, -1)
+    return obs
+
+
+@torch.jit.script
+def dof_to_obs_smpl(pose):
+    # type: (Tensor) -> Tensor
+    joint_obs_size = 6
+    B, jts = pose.shape
+    num_joints = int(jts / 3)
+
+    joint_dof_obs = quat_to_tan_norm(exp_map_to_quat(pose.reshape(-1, 3))).reshape(B, -1)
+    assert (num_joints * joint_obs_size) == joint_dof_obs.shape[1]
+
+    return joint_dof_obs
+
+
+@torch.jit.script
+def build_amp_observations_smpl(
+    root_pos,
+    root_rot,
+    root_vel,
+    root_ang_vel,
+    dof_pos,
+    dof_vel,
+    key_body_pos,
+    shape_params,
+    limb_weight_params,
+    dof_subset,
+    local_root_obs,
+    root_height_obs,
+    has_dof_subset,
+    has_shape_obs_disc,
+    has_limb_weight_obs,
+    upright,
+):
+    # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, bool, bool, bool, bool, bool, bool) -> Tensor
+    B, N = root_pos.shape
+    root_h = root_pos[:, 2:3]
+    if not upright:
+        root_rot = remove_base_rot(root_rot)
+    heading_rot_inv = calc_heading_quat_inv(root_rot)
+
+    if local_root_obs:
+        root_rot_obs = quat_mul(heading_rot_inv, root_rot)
+    else:
+        root_rot_obs = root_rot
+
+    root_rot_obs = quat_to_tan_norm(root_rot_obs)
+
+    local_root_vel = my_quat_rotate(heading_rot_inv, root_vel)
+    local_root_ang_vel = my_quat_rotate(heading_rot_inv, root_ang_vel)
+
+    root_pos_expand = root_pos.unsqueeze(-2)
+    local_key_body_pos = key_body_pos - root_pos_expand
+
+    heading_rot_expand = heading_rot_inv.unsqueeze(-2)
+    heading_rot_expand = heading_rot_expand.repeat((1, local_key_body_pos.shape[1], 1))
+    flat_end_pos = local_key_body_pos.view(
+        local_key_body_pos.shape[0] * local_key_body_pos.shape[1], local_key_body_pos.shape[2]
+    )
+    flat_heading_rot = heading_rot_expand.view(
+        heading_rot_expand.shape[0] * heading_rot_expand.shape[1], heading_rot_expand.shape[2]
+    )
+    local_end_pos = my_quat_rotate(flat_heading_rot, flat_end_pos)
+    flat_local_key_pos = local_end_pos.view(
+        local_key_body_pos.shape[0], local_key_body_pos.shape[1] * local_key_body_pos.shape[2]
+    )
+
+    if has_dof_subset:
+        dof_vel = dof_vel[:, dof_subset]
+        dof_pos = dof_pos[:, dof_subset]
+
+    dof_obs = dof_to_obs_smpl(dof_pos)
+    obs_list = []
+    if root_height_obs:
+        obs_list.append(root_h)
+    obs_list += [
+        root_rot_obs,
+        local_root_vel,
+        local_root_ang_vel,
+        dof_obs,
+        dof_vel,
+        flat_local_key_pos,
+    ]
+    # 1? + 6 + 3 + 3 + 114 + 57 + 12
+    if has_shape_obs_disc:
+        obs_list.append(shape_params)
+    if has_limb_weight_obs:
+        obs_list.append(limb_weight_params)
+    obs = torch.cat(obs_list, dim=-1)
+
     return obs
 
 
