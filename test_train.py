@@ -16,7 +16,7 @@ from phc.utils.flags import flags
 from phc.utils.config import set_np_formatting, set_seed
 
 from phc.run_hydra import build_alg_runner, RLGPUAlgoObserver, parse_sim_params
-from phc.env.tasks.vec_task_wrappers import VecTaskPythonWrapper
+from phc.pufferl.wrappers import VecTaskWrapper
 
 from phc.env.tasks.humanoid_im import HumanoidIm as OrgHumanoidIm  # original
 from phc.pufferl.humanoid_im import HumanoidIm
@@ -47,7 +47,7 @@ def create_rlgpu_env(**kwargs):
         headless=args.headless
     )
 
-    env = VecTaskPythonWrapper(task, args.rl_device, cfg_train.get("clip_observations", np.inf))
+    env = VecTaskWrapper(task, args.rl_device, cfg_train.get("clip_observations", np.inf))
 
     print(env.num_envs)
     print(env.num_actions)
