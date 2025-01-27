@@ -138,6 +138,13 @@ class CommonAgent(a2c_continuous.A2CAgent):
                 self.writer.add_scalar('performance/step_fps', curr_frames / scaled_play_time, frame)
                 self.writer.add_scalar('episode_lengths/epochs', epoch_num, frame)
                 train_info_dict = self._assemble_train_info(train_info, frame)
+
+                # Include fps info to wandb
+                train_info_dict.update({
+                    "performance/total_fps": curr_frames / scaled_time,
+                    "performance/step_fps": curr_frames / scaled_play_time,
+                })
+
                 self.algo_observer.after_print_stats(frame, epoch_num, total_time)
                 if self.save_freq > 0:
                     
