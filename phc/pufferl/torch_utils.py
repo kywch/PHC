@@ -31,6 +31,15 @@ from typing import List, Optional
 import torch
 
 
+def to_torch(x, dtype=torch.float, device="cuda:0", requires_grad=False):
+    return torch.tensor(x, dtype=dtype, device=device, requires_grad=requires_grad)
+
+
+@torch.jit.script
+def normalize(x, eps: float = 1e-9):
+    return x / x.norm(p=2, dim=-1).clamp(min=eps, max=None).unsqueeze(-1)
+
+
 @torch.jit.script
 def normalize_angle(x):
     return torch.atan2(torch.sin(x), torch.cos(x))
@@ -206,7 +215,7 @@ def quat_angle_axis(x):
     The (angle, axis) representation of the rotation. The axis is normalized to unit length.
     The angle is guaranteed to be between [0, pi].
     """
-    s = 2 * (x[..., 3]**2) - 1
+    s = 2 * (x[..., 3] ** 2) - 1
     angle = s.clamp(-1, 1).arccos()  # just to be safe
     axis = x[..., :3]
     axis /= axis.norm(p=2, dim=-1, keepdim=True).clamp(min=1e-9)
@@ -255,6 +264,35 @@ def quat_rotate(rot, vec):
     return quat_imaginary(quat_mul(quat_mul(rot, other_q), quat_conjugate(rot)))
 
 
+# NOTE: what's the difference between my_quat_rotate and quat_rotate?
+# copied from https://github.com/ZhengyiLuo/PHC/blob/master/phc/utils/torch_utils.py#L46
+@torch.jit.script
+def my_quat_rotate(q, v):
+    shape = q.shape
+    q_w = q[:, -1]
+    q_vec = q[:, :3]
+    a = v * (2.0 * q_w**2 - 1.0).unsqueeze(-1)
+    b = torch.cross(q_vec, v, dim=-1) * q_w.unsqueeze(-1) * 2.0
+    c = q_vec * torch.bmm(q_vec.view(shape[0], 1, 3), v.view(shape[0], 3, 1)).squeeze(-1) * 2.0
+    return a + b + c
+
+
+@torch.jit.script
+def quat_to_tan_norm(q):
+    # type: (Tensor) -> Tensor
+    # represents a rotation using the tangent and normal vectors
+    ref_tan = torch.zeros_like(q[..., 0:3])
+    ref_tan[..., 0] = 1
+    tan = my_quat_rotate(q, ref_tan)
+
+    ref_norm = torch.zeros_like(q[..., 0:3])
+    ref_norm[..., -1] = 1
+    norm = my_quat_rotate(q, ref_norm)
+
+    norm_tan = torch.cat([tan, norm], dim=len(tan.shape) - 1)
+    return norm_tan
+
+
 @torch.jit.script
 def transform_rotation(x):
     """Get rotation from transform"""
@@ -288,3 +326,81 @@ def transform_mul(x, y):
         t=quat_rotate(transform_rotation(x), transform_translation(y)) + transform_translation(x),
     )
     return z
+
+
+@torch.jit.script
+def exp_map_to_angle_axis(exp_map):
+    min_theta = 1e-5
+
+    angle = torch.norm(exp_map, dim=-1)
+    angle_exp = torch.unsqueeze(angle, dim=-1)
+    axis = exp_map / angle_exp
+    angle = normalize_angle(angle)
+
+    default_axis = torch.zeros_like(exp_map)
+    default_axis[..., -1] = 1
+
+    mask = torch.abs(angle) > min_theta
+    angle = torch.where(mask, angle, torch.zeros_like(angle))
+    mask_expand = mask.unsqueeze(-1)
+    axis = torch.where(mask_expand, axis, default_axis)
+
+    return angle, axis
+
+
+@torch.jit.script
+def quat_from_angle_axis(angle, axis):
+    theta = (angle / 2).unsqueeze(-1)
+    xyz = normalize(axis) * theta.sin()
+    w = theta.cos()
+    return quat_unit(torch.cat([xyz, w], dim=-1))
+
+
+@torch.jit.script
+def exp_map_to_quat(exp_map):
+    angle, axis = exp_map_to_angle_axis(exp_map)
+    q = quat_from_angle_axis(angle, axis)
+    return q
+
+
+@torch.jit.script
+def calc_heading(q):
+    # type: (Tensor) -> Tensor
+    # calculate heading direction from quaternion
+    # the heading is the direction on the xy plane
+    # q must be normalized
+    # this is the x axis heading
+    ref_dir = torch.zeros_like(q[..., 0:3])
+    ref_dir[..., 0] = 1
+    rot_dir = my_quat_rotate(q, ref_dir)
+
+    heading = torch.atan2(rot_dir[..., 1], rot_dir[..., 0])
+    return heading
+
+
+@torch.jit.script
+def calc_heading_quat(q):
+    # type: (Tensor) -> Tensor
+    # calculate heading rotation from quaternion
+    # the heading is the direction on the xy plane
+    # q must be normalized
+    heading = calc_heading(q)
+    axis = torch.zeros_like(q[..., 0:3])
+    axis[..., 2] = 1
+
+    heading_q = quat_from_angle_axis(heading, axis)
+    return heading_q
+
+
+@torch.jit.script
+def calc_heading_quat_inv(q):
+    # type: (Tensor) -> Tensor
+    # calculate heading rotation from quaternion
+    # the heading is the direction on the xy plane
+    # q must be normalized
+    heading = calc_heading(q)
+    axis = torch.zeros_like(q[..., 0:3])
+    axis[..., 2] = 1
+
+    heading_q = quat_from_angle_axis(-heading, axis)
+    return heading_q
