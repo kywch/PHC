@@ -3,7 +3,7 @@ task: HumanoidIm
 project_name: "PHC"
 notes:  ""
 motion_file: ""
-num_envs: 3072
+num_envs: 2048
 env_spacing: 5
 episode_length: 300
 is_flag_run: False
