@@ -224,7 +224,7 @@ class RLGPUEnv(vecenv.IVecEnv):
         info['observation_space'] = self.env.observation_space
         info['amp_observation_space'] = self.env.amp_observation_space
         
-        info['enc_amp_observation_space'] = self.env.enc_amp_observation_space
+        # info['enc_amp_observation_space'] = self.env.enc_amp_observation_space
         
         if isinstance(self.env.task, humanoid_amp_task.HumanoidAMPTask):
             info['task_obs_size'] = self.env.task.get_task_obs_size()
