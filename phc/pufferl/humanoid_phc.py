@@ -235,7 +235,6 @@ class HumanoidPHC(Humanoid):
 
         # Not used in SMPL PHC
         # self.hard_negative = cfg["env"].get("hard_negative", False)  # hard negative sampling for im
-        # self.cycle_motion = cfg["env"].get("cycle_motion", False)  # Cycle motion to reach 300
 
         # Remove these
         self._divide_group = cfg["env"].get("divide_group", False)
@@ -243,6 +242,7 @@ class HumanoidPHC(Humanoid):
         self.amp_obs_v = cfg["env"].get("amp_obs_v", 1)
         self.zero_out_far = cfg["env"].get("zero_out_far", False)
         self.zero_out_far_train = cfg["env"].get("zero_out_far_train", True)
+        self.cycle_motion = cfg["env"].get("cycle_motion", False)  # Cycle motion to reach 300
 
         ##### Env Configs done. Move these out #####
 
