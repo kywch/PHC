@@ -1233,13 +1233,12 @@ class HumanoidPHC(Humanoid):
             flags.im_eval and (not self.strict_eval),
         )
 
+        # NOTE: When cycle_motion is False, self._cycle_counter is always 0, so is_recovery is always False.
         # is_recovery = torch.logical_and(
         #     ~pass_time, self._cycle_counter > 0
         # )  # pass time should override the cycle counter.
-
-        is_recovery = ~pass_time
-        self.reset_buf[is_recovery] = 0
-        self._terminate_buf[is_recovery] = 0
+        # self.reset_buf[is_recovery] = 0
+        # self._terminate_buf[is_recovery] = 0
 
 
 #####################################################################
