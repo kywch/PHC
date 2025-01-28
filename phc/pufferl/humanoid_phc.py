@@ -8,6 +8,9 @@ from easydict import EasyDict
 import torch
 import numpy as np
 
+from smpl_sim.smpllib.smpl_joint_names import SMPL_MUJOCO_NAMES, SMPLH_MUJOCO_NAMES
+from smpl_sim.smpllib.smpl_local_robot import SMPL_Robot
+
 # TODO: consolidate into pufferl.torch_utils
 # from isaacgym.torch_utils import *
 # from phc.utils import torch_utils
@@ -26,6 +29,7 @@ from phc.pufferl.torch_utils import (
 # TODO: remove these
 from phc.utils.flags import flags
 from phc.env.tasks.humanoid import Humanoid
+from phc.env.tasks.base_task import BaseTask
 
 # NOTE: testing single-file poselib and motionlib
 # from phc.utils.motion_lib_real import MotionLibReal
@@ -46,8 +50,11 @@ class StateInit(Enum):
 
 class HumanoidPHC(Humanoid):
     def __init__(self, cfg, sim_params, physics_engine, device_type, device_id, headless):
-        self.load_humanoid_configs(cfg)
         self.cfg = cfg
+        self.sim_params = sim_params
+        self.physics_engine = physics_engine
+        self.has_task = False  # TODO: remove this, as it is only used in amp_agent/player.py (rlgames)
+
         self.num_envs = cfg["env"]["num_envs"]
         self.device_type = cfg.get("device_type", "cuda")
         self.device_id = cfg.get("device_id", 0)
@@ -56,6 +63,14 @@ class HumanoidPHC(Humanoid):
         self.device = "cpu"
         if self.device_type == "cuda" or self.device_type == "GPU":
             self.device = "cuda" + ":" + str(self.device_id)
+
+        # load_humanoid_configs(cfg)
+        self.humanoid_type = cfg.robot.humanoid_type
+        assert self.humanoid_type == "smpl"
+        
+        # TODO: parse out the env configs
+        self.xcxc_test_load_config = True  # debug flag. 
+        self.load_robot_configs(cfg)
 
         self._num_joints = len(self._body_names)
 
@@ -138,7 +153,7 @@ class HumanoidPHC(Humanoid):
         self.seq_motions = cfg["env"].get("seq_motions", False)
         self._min_motion_len = cfg["env"].get("min_length", -1)
 
-        self.start_idx = 0
+        self.start_idx = cfg["env"].get("start_idx", 0)
         self._motion_start_times = torch.zeros(self.num_envs).to(self.device)
         self._motion_start_times_offset = torch.zeros(self.num_envs).to(self.device)
         # self._cycle_counter = torch.zeros(self.num_envs, device=self.device, dtype=torch.int)
@@ -158,6 +173,121 @@ class HumanoidPHC(Humanoid):
         self._hist_amp_obs_buf = self._amp_obs_buf[:, 1:]
 
         self._amp_obs_demo_buf = None
+
+    def load_robot_configs(self, cfg):
+
+        # For SMPL PHC, the below are different from the default
+        self._has_self_collision = cfg.robot.get("has_self_collision", False)  # is True
+        self._has_dof_subset = cfg.robot.get("has_dof_subset", False)  # is True
+
+        # The below configs have the default value #####
+        # NOTE: These are used in the obs/reward compuation. Revisit later.
+        self._has_shape_obs = cfg.robot.get("has_shape_obs", False)
+        self._has_shape_obs_disc = cfg.robot.get("has_shape_obs_disc", False)
+        self._has_limb_weight_obs = cfg.robot.get("has_weight_obs", False)
+        self._has_limb_weight_obs_disc = cfg.robot.get("has_weight_obs_disc", False)
+        self.has_shape_variation = cfg.robot.get("has_shape_variation", False)
+        self._bias_offset = cfg.robot.get("bias_offset", False)
+
+        # Used in robot_config below.
+        self._has_mesh = cfg.robot.get("has_mesh", True)  # is False
+        self._replace_feet = cfg.robot.get("replace_feet", True)
+        self._has_jt_limit = cfg.robot.get("has_jt_limit", True)  # is False
+        self._has_upright_start = cfg.robot.get("has_upright_start", True)
+        self.remove_toe = cfg.robot.get("remove_toe", False)
+        self._freeze_hand = cfg.robot.get("freeze_hand", True)
+        self._real_weight_porpotion_capsules = cfg.robot.get("real_weight_porpotion_capsules", False)  # is True
+        self._real_weight_porpotion_boxes = cfg.robot.get("real_weight_porpotion_boxes", False)  # is True
+        self._real_weight = cfg.robot.get("real_weight", False)  # is True
+        # masterfoot is used in many places. What is it?
+        self._masterfoot = cfg.robot.get("masterfoot", False)
+        self._master_range = cfg.robot.get("master_range", 30)
+        self.big_ankle = cfg.robot.get("big_ankle", False)  # is True
+        self._box_body = cfg.robot.get("box_body", False)  # is True
+
+        # reduce_action, _freeze_hand, _freeze_toe are used in self.pre_physics_step()
+        self.reduce_action = cfg.robot.get("reduce_action", False)
+        self._freeze_toe = cfg.robot.get("freeze_toe", True)
+        
+        # See self._build_pd_action_offset_scale()
+        self._has_smpl_pd_offset = cfg.robot.get("has_smpl_pd_offset", False)        
+
+        # CHECK ME: perhaps make load_env_configs vs. load_robot_configs?
+        ##### Env Configs #####
+
+        # For SMPL PHC, the below are different from the default
+        self.shape_resampling_interval = cfg["env"].get("shape_resampling_interval", 100)  # is 500
+        self.power_reward = cfg["env"].get("power_reward", False)  # is True
+
+        # The below configs have the default value. Revisit later #####
+        self.force_sensor_joints = cfg["env"].get("force_sensor_joints", ["L_Ankle", "R_Ankle"]) # force tensor joints
+        self.max_len = cfg["env"].get("max_len", -1)
+
+        self.getup_schedule = cfg["env"].get("getup_schedule", False)
+        self._kp_scale = cfg["env"].get("kp_scale", 1.0)
+        self._kd_scale = cfg["env"].get("kd_scale", self._kp_scale)
+
+        self._res_action = cfg["env"].get("res_action", False)
+        self.add_obs_noise = cfg["env"].get("add_obs_noise", False)
+        self.add_action_noise = cfg["env"].get("add_action_noise", False)
+        self.action_noise_std = cfg["env"].get("action_noise_std", 0.05)
+        self.collect_dataset = cfg.get("collect_dataset", False)
+
+        # Not used in SMPL PHC
+        # self.hard_negative = cfg["env"].get("hard_negative", False)  # hard negative sampling for im
+        # self.cycle_motion = cfg["env"].get("cycle_motion", False)  # Cycle motion to reach 300
+
+        # Remove these
+        self._divide_group = cfg["env"].get("divide_group", False)
+        self.obs_v = cfg["env"].get("obs_v", 1)  # is 6
+        self.amp_obs_v = cfg["env"].get("amp_obs_v", 1)
+        self.zero_out_far = cfg["env"].get("zero_out_far", False)
+        self.zero_out_far_train = cfg["env"].get("zero_out_far_train", True)
+
+        ##### Env Configs done. Move these out #####
+
+        # Moving on to robot config
+        assert not self._masterfoot
+        self.action_idx = [0, 1, 2, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 36, 37, 42, 43, 44, 47, 48, 49, 50, 57, 58, 59, 62, 63, 64, 65]
+
+        disc_idxes = []
+        assert self.humanoid_type == "smpl"
+        self._body_names_orig = SMPL_MUJOCO_NAMES
+        self._full_track_bodies = self._body_names_orig.copy()
+
+        _body_names_orig_copy = self._body_names_orig.copy()
+        # Following UHC as hand and toes does not have realiable data.
+        remove_names = ["L_Hand", "R_Hand", "L_Toe", "R_Toe"]
+        for name in remove_names:
+            _body_names_orig_copy.remove(name)
+        self._eval_bodies = _body_names_orig_copy # default eval bodies
+
+        self._body_names = self._body_names_orig
+        self._masterfoot_config = None
+
+        self.joint_groups = [
+            ['L_Hip', 'L_Knee', 'L_Ankle', 'L_Toe'],
+            ['R_Hip', 'R_Knee', 'R_Ankle', 'R_Toe'],
+            ['Pelvis',  'Torso', 'Spine', 'Chest', 'Neck', 'Head'],
+            ['L_Thorax', 'L_Shoulder', 'L_Elbow', 'L_Wrist', 'L_Hand'],
+            ['R_Thorax', 'R_Shoulder', 'R_Elbow', 'R_Wrist', 'R_Hand']
+        ]
+        self.limb_weight_group = [[self._body_names.index(joint_name) for joint_name in joint_group] 
+                                for joint_group in self.joint_groups]
+
+        self._dof_names = self._body_names[1:]
+        for idx, name in enumerate(self._dof_names):
+            if name not in remove_names:
+                disc_idxes.append(np.arange(idx * 3, (idx + 1) * 3))
+
+        self.dof_subset = torch.from_numpy(np.concatenate(disc_idxes)) if len(disc_idxes) > 0 else torch.tensor([]).long()
+        self.left_indexes = [idx for idx , name in enumerate(self._dof_names) if name.startswith("L")]
+        self.right_indexes = [idx for idx , name in enumerate(self._dof_names) if name.startswith("R")]
+        
+        self.left_lower_indexes = [idx for idx , name in enumerate(self._dof_names) if name.startswith("L") and name[2:] in ["Hip", "Knee", "Ankle", "Toe"]]
+        self.right_lower_indexes = [idx for idx , name in enumerate(self._dof_names) if name.startswith("R") and name[2:] in ["Hip", "Knee", "Ankle", "Toe"]]
+        
+        self._load_amass_gender_betas()
 
     # NOTE: check the arg i
     def render(self, sync_frame_time=False, i=0):
@@ -468,7 +598,7 @@ class HumanoidPHC(Humanoid):
         # task_obs_detail["num_traj_samples"] = self._num_traj_samples
         task_obs_detail["obs_v"] = self.obs_v
         task_obs_detail["track_bodies"] = self._track_bodies
-        task_obs_detail["models_path"] = self.models_path
+        # task_obs_detail["models_path"] = self.models_path
 
         # Dev
         task_obs_detail["num_prim"] = self.cfg["env"].get("num_prim", 2)
