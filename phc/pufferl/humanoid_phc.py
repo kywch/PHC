@@ -82,6 +82,9 @@ class HumanoidPHC(Humanoid):
         self._reset_bodies = cfg["env"].get("reset_bodies", self._track_bodies)
         self._reset_bodies_id = self._build_key_body_ids_tensor(self._reset_bodies)
 
+        # Used in https://github.com/kywch/PHC/blob/pixi/phc/learning/im_amp.py#L181. Check how it is used.
+        self._eval_track_bodies_id = self._build_key_body_ids_tensor(self._eval_bodies)
+
         spacing = 5
         side_lenght = torch.ceil(torch.sqrt(torch.tensor(self.num_envs)))
         pos_x, pos_y = torch.meshgrid(
