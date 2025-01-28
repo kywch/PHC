@@ -19,7 +19,7 @@ from phc.run_hydra import build_alg_runner, RLGPUAlgoObserver, parse_sim_params
 from phc.pufferl.wrappers import VecTaskWrapper
 
 from phc.env.tasks.humanoid_im import HumanoidIm as OrgHumanoidIm  # original
-from phc.pufferl.humanoid_im import HumanoidIm
+from phc.pufferl.humanoid_phc import HumanoidPHC
 
 
 env_configurations.register('rlgpu', {'env_creator': lambda **kwargs: create_rlgpu_env(**kwargs), 'vecenv_type': 'RLGPU'})
@@ -37,8 +37,8 @@ def create_rlgpu_env(**kwargs):
     }) #### ZL: patch 
 
     # task, env = parse_task(args, cfg, cfg_train, sim_params)
-    assert args.task == "HumanoidIm", "Porting HumanoidIm only"
-    task = HumanoidIm(
+    assert args.task == "HumanoidIm", "Porting HumanoidIm (PHC) only"
+    task = HumanoidPHC(
         cfg=cfg,
         sim_params=sim_params,
         physics_engine=args.physics_engine,
