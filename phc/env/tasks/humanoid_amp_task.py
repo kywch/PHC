@@ -29,7 +29,7 @@
 import torch
 
 import phc.env.tasks.humanoid_amp as humanoid_amp
-from phc.utils.flags import flags
+from phc import flags
 class HumanoidAMPTask(humanoid_amp.HumanoidAMP):
     def __init__(self, cfg, sim_params, physics_engine, device_type, device_id, headless):
         self._enable_task_obs = cfg["env"]["enableTaskObs"]

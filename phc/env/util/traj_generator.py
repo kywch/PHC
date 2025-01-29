@@ -30,7 +30,7 @@ import numpy as np
 import torch
 import joblib
 import random
-from phc.utils.flags import flags
+from phc import flags
 # from phc.env.tasks.base_task import PORT, SERVER
 
 class TrajGenerator():

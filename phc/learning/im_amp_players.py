@@ -8,7 +8,7 @@ sys.path.append(os.getcwd())
 
 import numpy as np
 import torch
-from phc.utils.flags import flags
+from phc import flags
 from rl_games.algos_torch import torch_ext
 from rl_games.common.player import BasePlayer
 

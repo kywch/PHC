@@ -47,7 +47,7 @@ from rl_games.common import env_configurations, experiment, vecenv
 from rl_games.common.algo_observer import AlgoObserver
 from rl_games.torch_runner import Runner
 
-from phc.utils.flags import flags
+from phc import flags
 
 import numpy as np
 import copy

@@ -59,7 +59,7 @@ from smpl_sim.smpllib.smpl_parser import (
     SMPLX_Parser,
 )
 import gc
-from phc.utils.flags import flags
+from phc import flags
 from collections import OrderedDict
 
 HACK_MOTION_SYNC = False

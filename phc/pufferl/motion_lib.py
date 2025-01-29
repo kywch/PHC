@@ -1,24 +1,24 @@
 # BSD 3-Clause Clear License
-# 
+#
 # Copyright (c) 2023 Carnegie Mellon University
-# 
+#
 # Copyright (c) 2018-2023, NVIDIA Corporation
 # All rights reserved.
-# 
+#
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:
-# 
+#
 # 1. Redistributions of source code must retain the above copyright notice, this
 #    list of conditions and the following disclaimer.
-# 
+#
 # 2. Redistributions in binary form must reproduce the above copyright notice,
 #    this list of conditions and the following disclaimer in the documentation
 #    and/or other materials provided with the distribution.
-# 
+#
 # 3. Neither the name of the copyright holder nor the names of its
 #    contributors may be used to endorse or promote products derived from
 #    this software without specific prior written permission.
-# 
+#
 # NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY’S PATENT RIGHTS ARE GRANTED BY THIS LICENSE.
 #
 # THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
@@ -47,19 +47,11 @@ from scipy.spatial.transform import Rotation as sRot
 import torch
 import torch.multiprocessing as mp
 
-from smpl_sim.smpllib.smpl_parser import (
-    SMPL_Parser,
-    # SMPLH_Parser,
-    # SMPLX_Parser,
-)
+from smpl_sim.smpllib.smpl_parser import SMPL_Parser
 
 from phc import BODY_MODEL_DIR
 from phc.pufferl.poselib_skeleton import SkeletonMotion, SkeletonState
 from phc.pufferl import torch_utils
-
-# TODO: remove this
-from phc.utils.flags import flags
-
 
 USE_CACHE = False
 # print("MOVING MOTION DATA TO GPU, USING CACHE:", USE_CACHE)
@@ -162,8 +154,8 @@ class DeviceCache:
 class MotionLibBase:
     def __init__(self, motion_lib_cfg):
         self.m_cfg = motion_lib_cfg
-        self._sim_fps = 1 / self.m_cfg.get("step_dt", 1 / 30)
-        print("SIM FPS:", self._sim_fps)
+        self._sim_fps = 1 / self.m_cfg.get("step_dt", 1 / 30)  # CHECK ME: hardcoded
+        print("SIM FPS (from MotionLibBase):", self._sim_fps)
         self._device = self.m_cfg.device
 
         self.mesh_parsers = None
@@ -172,12 +164,6 @@ class MotionLibBase:
             self.m_cfg.motion_file, min_length=self.m_cfg.min_length, im_eval=self.m_cfg.im_eval
         )
         self.setup_constants(fix_height=self.m_cfg.fix_height, multi_thread=self.m_cfg.multi_thread)
-
-        if flags.real_traj:
-            self.track_idx = self._motion_data_load[next(iter(self._motion_data_load))].get(
-                "track_idx", [19, 24, 29]
-            )
-        return
 
     def load_data(self, motion_file, min_length=-1, im_eval=False):
         if osp.isfile(motion_file):
@@ -274,8 +260,6 @@ class MotionLibBase:
                 self._motion_bodies,
                 self._motion_aa,
             )
-            if flags.real_traj:
-                del self.q_gts, self.q_grs, self.q_gavs, self.q_gvs
 
         motions = []
         self._motion_lengths = []
@@ -284,9 +268,6 @@ class MotionLibBase:
         self._motion_num_frames = []
         self._motion_bodies = []
         self._motion_aa = []
-
-        if flags.real_traj:
-            self.q_gts, self.q_grs, self.q_gavs, self.q_gvs = [], [], [], []
 
         torch.cuda.empty_cache()
         gc.collect()
@@ -332,8 +313,6 @@ class MotionLibBase:
         num_jobs = min(mp.cpu_count(), 64)
 
         if num_jobs <= 8 or not self.multi_thread:
-            num_jobs = 1
-        if flags.debug:
             num_jobs = 1
 
         res_acc = {}  # using dictionary ensures order of the results.
@@ -387,12 +366,6 @@ class MotionLibBase:
             motions.append(curr_motion)
             self._motion_lengths.append(curr_len)
 
-            if flags.real_traj:
-                self.q_gts.append(curr_motion.quest_motion["quest_trans"])
-                self.q_grs.append(curr_motion.quest_motion["quest_rot"])
-                self.q_gavs.append(curr_motion.quest_motion["global_angular_vel"])
-                self.q_gvs.append(curr_motion.quest_motion["linear_vel"])
-
             del curr_motion
 
         self._motion_lengths = torch.tensor(
@@ -429,12 +402,6 @@ class MotionLibBase:
         )
         self.gvs = torch.cat([m.global_velocity for m in motions], dim=0).float().to(self._device)
         self.dvs = torch.cat([m.dof_vels for m in motions], dim=0).float().to(self._device)
-
-        if flags.real_traj:
-            self.q_gts = torch.cat(self.q_gts, dim=0).float().to(self._device)
-            self.q_grs = torch.cat(self.q_grs, dim=0).float().to(self._device)
-            self.q_gavs = torch.cat(self.q_gavs, dim=0).float().to(self._device)
-            self.q_gvs = torch.cat(self.q_gvs, dim=0).float().to(self._device)
 
         lengths = self._motion_num_frames
         lengths_shifted = lengths.roll(1)
@@ -645,22 +612,6 @@ class MotionLibBase:
         rb_rot1 = self.grs[f1l]
         rb_rot = torch_utils.slerp(rb_rot0, rb_rot1, blend_exp)
 
-        if flags.real_traj:
-            q_body_ang_vel0, q_body_ang_vel1 = self.q_gavs[f0l], self.q_gavs[f1l]
-            q_rb_rot0, q_rb_rot1 = self.q_grs[f0l], self.q_grs[f1l]
-            q_rg_pos0, q_rg_pos1 = self.q_gts[f0l, :], self.q_gts[f1l, :]
-            q_body_vel0, q_body_vel1 = self.q_gvs[f0l], self.q_gvs[f1l]
-
-            q_ang_vel = (1.0 - blend_exp) * q_body_ang_vel0 + blend_exp * q_body_ang_vel1
-            q_rb_rot = torch_utils.slerp(q_rb_rot0, q_rb_rot1, blend_exp)
-            q_rg_pos = (1.0 - blend_exp) * q_rg_pos0 + blend_exp * q_rg_pos1
-            q_body_vel = (1.0 - blend_exp) * q_body_vel0 + blend_exp * q_body_vel1
-
-            rg_pos[:, self.track_idx] = q_rg_pos
-            rb_rot[:, self.track_idx] = q_rb_rot
-            body_vel[:, self.track_idx] = q_body_vel
-            body_ang_vel[:, self.track_idx] = q_ang_vel
-
         return {
             "root_pos": rg_pos[..., 0, :].clone(),
             "root_rot": rb_rot[..., 0, :].clone(),
@@ -742,42 +693,11 @@ class MotionLibSMPL(MotionLibBase):
             else:
                 raise NotImplementedError(f"SMPL type {motion_lib_cfg.smpl_type} not implemented")
 
-            # elif motion_lib_cfg.smpl_type == "smplh":
-            #     smpl_parser_n = SMPLH_Parser(model_path=data_dir, gender="neutral")
-            #     smpl_parser_m = SMPLH_Parser(model_path=data_dir, gender="male")
-            #     smpl_parser_f = SMPLH_Parser(model_path=data_dir, gender="female")
-            # elif motion_lib_cfg.smpl_type == "smplx":
-            #     smpl_parser_n = SMPLX_Parser(
-            #         model_path=data_dir,
-            #         gender="neutral",
-            #         use_pca=False,
-            #         create_transl=False,
-            #         flat_hand_mean=True,
-            #         num_betas=20,
-            #     )
-            #     smpl_parser_m = SMPLX_Parser(
-            #         model_path=data_dir,
-            #         gender="male",
-            #         use_pca=False,
-            #         create_transl=False,
-            #         flat_hand_mean=True,
-            #         num_betas=20,
-            #     )
-            #     smpl_parser_f = SMPLX_Parser(
-            #         model_path=data_dir,
-            #         gender="female",
-            #         use_pca=False,
-            #         create_transl=False,
-            #         flat_hand_mean=True,
-            #         num_betas=20,
-            #     )
-
             self.mesh_parsers = {0: smpl_parser_n, 1: smpl_parser_m, 2: smpl_parser_f}
+
         else:
             print("SMPL models not found, set mesh_parsers to None")
             self.mesh_parsers = None
-
-        return
 
     @staticmethod
     def fix_trans_height(pose_aa, trans, curr_gender_betas, mesh_parsers, fix_height_mode):
@@ -831,7 +751,14 @@ class MotionLibSMPL(MotionLibBase):
 
     @staticmethod
     def load_motion_with_skeleton(
-        ids, motion_data_list, skeleton_trees, shape_params, mesh_parsers, config, queue, pid
+        ids,
+        motion_data_list,
+        skeleton_trees,
+        shape_params,
+        mesh_parsers,
+        config,
+        queue,
+        pid,
     ):
         # ZL: loading motion with the specified skeleton. Perfoming forward kinematics to get the joint positions
         max_len = config.max_length
@@ -868,28 +795,26 @@ class MotionLibSMPL(MotionLibBase):
             B, J, N = pose_quat_global.shape
 
             ##### ZL: randomize the heading ######
-            if (not flags.im_eval) and (not flags.test):
-                # if True:
-                random_rot = np.zeros(3)
-                random_rot[2] = np.pi * (2 * np.random.random() - 1.0)
-                random_heading_rot = sRot.from_euler("xyz", random_rot)
-                pose_aa[:, :3] = torch.tensor(
-                    (random_heading_rot * sRot.from_rotvec(pose_aa[:, :3])).as_rotvec()
-                )
-                pose_quat_global = (
-                    (random_heading_rot * sRot.from_quat(pose_quat_global.reshape(-1, 4)))
-                    .as_quat()
-                    .reshape(B, J, N)
-                )
-                trans = torch.matmul(trans, torch.from_numpy(random_heading_rot.as_matrix().T))
+            random_rot = np.zeros(3)
+            random_rot[2] = np.pi * (2 * np.random.random() - 1.0)
+            random_heading_rot = sRot.from_euler("xyz", random_rot)
+            pose_aa[:, :3] = torch.tensor(
+                (random_heading_rot * sRot.from_rotvec(pose_aa[:, :3])).as_rotvec()
+            )
+            pose_quat_global = (
+                (random_heading_rot * sRot.from_quat(pose_quat_global.reshape(-1, 4)))
+                .as_quat()
+                .reshape(B, J, N)
+            )
+            trans = torch.matmul(trans, torch.from_numpy(random_heading_rot.as_matrix().T))
             ##### ZL: randomize the heading ######
 
             if mesh_parsers is not None:
                 trans, trans_fix = MotionLibSMPL.fix_trans_height(
                     pose_aa, trans, curr_gender_beta, mesh_parsers, fix_height_mode=fix_height
                 )
-            else:
-                trans_fix = 0
+            # else:
+            #     trans_fix = 0
 
             pose_quat_global = to_torch(pose_quat_global)
             sk_state = SkeletonState.from_rotation_and_root_translation(
@@ -898,27 +823,6 @@ class MotionLibSMPL(MotionLibBase):
 
             curr_motion = SkeletonMotion.from_skeleton_state(sk_state, curr_file.get("fps", 30))
             curr_dof_vels = compute_motion_dof_vels(curr_motion)
-
-            if flags.real_traj:
-                quest_sensor_data = to_torch(curr_file["quest_sensor_data"])
-                quest_trans = quest_sensor_data[..., :3]
-                quest_rot = quest_sensor_data[..., 3:]
-
-                quest_trans[..., -1] -= trans_fix  # Fix trans
-
-                global_angular_vel = SkeletonMotion._compute_angular_velocity(
-                    quest_rot, time_delta=1 / curr_file["fps"]
-                )
-                linear_vel = SkeletonMotion._compute_velocity(
-                    quest_trans, time_delta=1 / curr_file["fps"]
-                )
-                quest_motion = {
-                    "global_angular_vel": global_angular_vel,
-                    "linear_vel": linear_vel,
-                    "quest_trans": quest_trans,
-                    "quest_rot": quest_rot,
-                }
-                curr_motion.quest_motion = quest_motion
 
             curr_motion.dof_vels = curr_dof_vels
             curr_motion.gender_beta = curr_gender_beta

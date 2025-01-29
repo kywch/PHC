@@ -25,7 +25,7 @@ from phc.env.tasks.humanoid_amp_task import HumanoidAMPTask
 
 import phc.learning.replay_buffer as replay_buffer
 import phc.learning.amp_agent as amp_agent
-from phc.utils.flags import flags
+from phc import flags
 from rl_games.common.tr_helpers import unsqueeze_obs
 from rl_games.algos_torch.players import rescale_actions
 

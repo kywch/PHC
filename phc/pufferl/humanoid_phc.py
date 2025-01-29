@@ -1,7 +1,6 @@
 import os
 from enum import Enum
 from typing import OrderedDict
-from types import SimpleNamespace
 
 from isaacgym import gymapi
 import gymtorch
@@ -12,7 +11,7 @@ from easydict import EasyDict
 
 from smpl_sim.smpllib.smpl_joint_names import SMPL_MUJOCO_NAMES
 
-from phc import PHC_ROOT
+from phc import PHC_ROOT, flags
 from phc.pufferl.poselib_skeleton import SkeletonTree
 from phc.pufferl.motion_lib import MotionLibSMPL, FixHeightMode
 from phc.pufferl.torch_utils import (
@@ -32,15 +31,6 @@ from phc.pufferl.torch_utils import (
 # optimization flags for pytorch JIT
 torch._C._jit_set_profiling_mode(False)
 torch._C._jit_set_profiling_executor(False)
-
-# CHECK ME: is this good practice?
-# Also check if each is being used at all
-flags = SimpleNamespace(
-    test=False,
-    debug=False,
-    real_traj=False,
-    im_eval=False,
-)
 
 
 class StateInit(Enum):

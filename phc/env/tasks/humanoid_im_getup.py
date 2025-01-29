@@ -37,7 +37,7 @@ from phc.env.tasks.humanoid_im import HumanoidIm
 from isaacgym.torch_utils import *
 
 # from utils import torch_utils
-from phc.utils.flags import flags
+from phc import flags
 
 
 class HumanoidImGetup(HumanoidIm):

@@ -10,7 +10,7 @@ from isaacgym import gymutil
 
 from rl_games.common import env_configurations
 
-from phc.utils.flags import flags
+from phc import flags
 from phc.utils.config import set_np_formatting, set_seed
 from phc.utils.parse_task import parse_task
 

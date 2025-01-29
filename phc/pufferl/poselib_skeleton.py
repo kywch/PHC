@@ -126,26 +126,6 @@ class Serializable:
             np.save(path, d)
 
 
-# class TensorUtils(Serializable):
-#     @classmethod
-#     def from_dict(cls, dict_repr, *args, **kwargs):
-#         """Read the object from an ordered dictionary
-
-#         :param dict_repr: the ordered dictionary that is used to construct the object
-#         :type dict_repr: OrderedDict
-#         :param kwargs: the arguments that need to be passed into from_dict()
-#         :type kwargs: additional arguments
-#         """
-#         return torch.from_numpy(dict_repr["arr"].astype(dict_repr["context"]["dtype"]))
-
-#     def to_dict(self):
-#         """Construct an ordered dictionary from the object
-
-#         :rtype: OrderedDict
-#         """
-#         return NotImplemented
-
-
 def torch_from_dict(dict_repr):
     """Read the object from an ordered dictionary
 
@@ -288,8 +268,6 @@ class SkeletonTree(Serializable):
             list(map(str, dict_repr["node_names"])),
             torch_from_dict(dict_repr["parent_indices"]),
             torch_from_dict(dict_repr["local_translation"]),
-            # TensorUtils.from_dict(dict_repr["parent_indices"], *args, **kwargs),
-            # TensorUtils.from_dict(dict_repr["local_translation"], *args, **kwargs),
         )
 
     def to_dict(self):
@@ -742,8 +720,6 @@ class SkeletonState(Serializable):
     ) -> "SkeletonState":
         rot = torch_from_dict(dict_repr["rotation"])
         rt = torch_from_dict(dict_repr["root_translation"])
-        # rot = TensorUtils.from_dict(dict_repr["rotation"], *args, **kwargs)
-        # rt = TensorUtils.from_dict(dict_repr["root_translation"], *args, **kwargs)
         return cls(
             SkeletonState._to_state_vector(rot, rt),
             SkeletonTree.from_dict(dict_repr["skeleton_tree"], *args, **kwargs),
@@ -1268,10 +1244,6 @@ class SkeletonMotion(SkeletonState):
         rt = torch_from_dict(dict_repr["root_translation"])
         vel = torch_from_dict(dict_repr["global_velocity"])
         avel = torch_from_dict(dict_repr["global_angular_velocity"])
-        # rot = TensorUtils.from_dict(dict_repr["rotation"], *args, **kwargs)
-        # rt = TensorUtils.from_dict(dict_repr["root_translation"], *args, **kwargs)
-        # vel = TensorUtils.from_dict(dict_repr["global_velocity"], *args, **kwargs)
-        # avel = TensorUtils.from_dict(dict_repr["global_angular_velocity"], *args, **kwargs)
         return cls(
             SkeletonMotion._to_state_vector(rot, rt, vel, avel),
             skeleton_tree=SkeletonTree.from_dict(dict_repr["skeleton_tree"], *args, **kwargs),

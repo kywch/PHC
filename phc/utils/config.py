@@ -42,7 +42,7 @@ from isaacgym import gymutil
 import numpy as np
 import random
 import torch
-from phc.utils.flags import flags
+from phc import flags
 
 SIM_TIMESTEP = 1.0 / 60.0
 

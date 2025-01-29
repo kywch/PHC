@@ -13,7 +13,7 @@ from isaacgym import gymapi
 # from isaacgym import gymtorch
 import gymtorch
 from isaacgym.torch_utils import *
-from phc.utils.flags import flags
+from phc import flags
 import joblib
 import gc
 from collections import defaultdict

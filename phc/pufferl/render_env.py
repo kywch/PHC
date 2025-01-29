@@ -15,8 +15,8 @@ import imageio
 import matplotlib
 import matplotlib.pyplot as plt
 
-from phc import PHC_ROOT
-from phc.pufferl.humanoid_phc import HumanoidPHC, flags
+from phc import PHC_ROOT, flags
+from phc.pufferl.humanoid_phc import HumanoidPHC
 from phc.pufferl.torch_utils import to_torch, exp_map_to_quat
 
 

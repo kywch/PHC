@@ -3,7 +3,7 @@ import torch
 import phc.env.tasks.humanoid_im as humanoid_im
 
 from isaacgym.torch_utils import *
-from phc.utils.flags import flags
+from phc import flags
 from rl_games.algos_torch import torch_ext
 import torch.nn as nn
 from phc.learning.pnn import PNN
