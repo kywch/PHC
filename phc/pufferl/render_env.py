@@ -19,30 +19,8 @@ class HumanoidRenderEnv(HumanoidPHC):
         if not self.headless or flags.server_mode:
             self._build_marker_state_tensors()
 
-    def pause_func(self, action):
-        self.paused = not self.paused
-
-    def next_func(self, action):
-        self.resample_motions()
-
-    def reset_func(self, action):
-        self.reset()
-
-    def record_func(self, action):
-        self.recording = not self.recording
-        self.recording_state_change_o3d = True
-        self.recording_state_change_o3d_img = True
-        self.recording_state_change = True  # only intialize from o3d.
-
-    def hide_ref(self, action):
-        flags.show_traj = not flags.show_traj
-
-    # NOTE: check the arg i
-    def render(self, sync_frame_time=False, i=0):
-        super().render(sync_frame_time=sync_frame_time)
-
-        if self.viewer or flags.server_mode:
-            self._update_marker()
+        if self.viewer is not None or flags.server_mode:
+            self._init_camera()
 
     def _create_envs(self, num_envs, spacing, num_per_row):
         if not self.headless or flags.server_mode:
@@ -111,6 +89,71 @@ class HumanoidRenderEnv(HumanoidPHC):
             self._marker_handles, dtype=torch.int32, device=self.device
         )
         self._marker_actor_ids = self._marker_actor_ids.flatten()
+
+    def _init_camera(self):
+        self.gym.refresh_actor_root_state_tensor(self.sim)
+        self._cam_prev_char_pos = self._humanoid_root_states[0, 0:3].cpu().numpy()
+
+        cam_pos = gymapi.Vec3(self._cam_prev_char_pos[0], self._cam_prev_char_pos[1] - 3.0, 1.0)
+        cam_target = gymapi.Vec3(self._cam_prev_char_pos[0], self._cam_prev_char_pos[1], 1.0)
+        if self.viewer:
+            self.gym.viewer_camera_look_at(self.viewer, None, cam_pos, cam_target)
+
+    ####################################################################
+    # Render-related
+
+    def pause_func(self, action):
+        self.paused = not self.paused
+
+    def next_func(self, action):
+        self.resample_motions()
+
+    def reset_func(self, action):
+        self.reset()
+
+    def record_func(self, action):
+        self.recording = not self.recording
+        self.recording_state_change_o3d = True
+        self.recording_state_change_o3d_img = True
+        self.recording_state_change = True  # only intialize from o3d.
+
+    def hide_ref(self, action):
+        flags.show_traj = not flags.show_traj
+
+    def _physics_step(self):
+        super()._physics_step()
+        self.render()
+
+    # NOTE: check the arg i
+    def render(self, sync_frame_time=False):
+        super().render(sync_frame_time=sync_frame_time)
+
+        if self.viewer or flags.server_mode:
+            self._update_camera()
+            self._update_marker()
+
+    def _update_camera(self):
+        self.gym.refresh_actor_root_state_tensor(self.sim)
+        char_root_pos = self._humanoid_root_states[0, 0:3].cpu().numpy()
+
+        cam_trans = self.gym.get_viewer_camera_transform(self.viewer, None)
+
+        cam_pos = np.array([cam_trans.p.x, cam_trans.p.y, cam_trans.p.z])
+        cam_delta = cam_pos - self._cam_prev_char_pos
+
+        new_cam_target = gymapi.Vec3(char_root_pos[0], char_root_pos[1], 1.0)
+        new_cam_pos = gymapi.Vec3(
+            char_root_pos[0] + cam_delta[0], char_root_pos[1] + cam_delta[1], cam_pos[2]
+        )
+
+        self.gym.set_camera_location(
+            self.recorder_camera_handle, self.envs[0], new_cam_pos, new_cam_target
+        )
+
+        if self.viewer:
+            self.gym.viewer_camera_look_at(self.viewer, None, new_cam_pos, new_cam_target)
+
+        self._cam_prev_char_pos[:] = char_root_pos
 
     def _update_marker(self):
         if flags.show_traj:
@@ -197,4 +240,3 @@ class HumanoidRenderEnv(HumanoidPHC):
         points[:, :, 0] = grid_x.flatten()
         points[:, :, 1] = grid_y.flatten()
         return points
-
