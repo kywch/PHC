@@ -1,25 +1,20 @@
 import os
 from enum import Enum
 from typing import OrderedDict
-from collections import defaultdict
+from types import SimpleNamespace
 
 from isaacgym import gymapi
 import gymtorch
 
-import joblib
-from easydict import EasyDict
-
 import torch
 import numpy as np
+from easydict import EasyDict
 
 from smpl_sim.smpllib.smpl_joint_names import SMPL_MUJOCO_NAMES
 
 from phc import PHC_ROOT
 from phc.pufferl.poselib_skeleton import SkeletonTree
-
-# TODO: consolidate into pufferl.torch_utils
-# from isaacgym.torch_utils import *
-# from phc.utils import torch_utils
+from phc.pufferl.motion_lib import MotionLibSMPL, FixHeightMode
 from phc.pufferl.torch_utils import (
     to_torch,
     get_axis_params,
@@ -34,19 +29,18 @@ from phc.pufferl.torch_utils import (
     quat_to_angle_axis,
 )
 
-# TODO: remove these
-from phc.utils.flags import flags
-from phc.env.tasks.humanoid import Humanoid
-from phc.env.tasks.base_task import BaseTask
+# optimization flags for pytorch JIT
+torch._C._jit_set_profiling_mode(False)
+torch._C._jit_set_profiling_executor(False)
 
-# NOTE: testing single-file poselib and motionlib
-# from phc.utils.motion_lib_real import MotionLibReal
-# from phc.utils.motion_lib_smpl import MotionLibSMPL
-# from phc.utils.motion_lib_base import FixHeightMode
-from phc.pufferl.motion_lib import MotionLibSMPL, FixHeightMode
-
-# from poselib.poselib.skeleton.skeleton3d import SkeletonTree, SkeletonMotion, SkeletonState
-# from phc.pufferl.poselib_skeleton import SkeletonState
+# CHECK ME: is this good practice?
+# Also check if each is being used at all
+flags = SimpleNamespace(
+    test=False,
+    debug=False,
+    real_traj=False,
+    im_eval=False,
+)
 
 
 class StateInit(Enum):
@@ -56,14 +50,15 @@ class StateInit(Enum):
     Hybrid = 3
 
 
-class HumanoidPHC(BaseTask):
+class HumanoidPHC:
     def __init__(self, cfg, sim_params, physics_engine, device_type, device_id, headless):
         self.cfg = cfg
         self.sim_params = sim_params
         self.physics_engine = physics_engine
-        self.has_task = (
-            False  # TODO: remove this, as it is only used in amp_agent/player.py (rlgames)
-        )
+
+        # TODO: remove these, which are only used in amp_agent/player.py (rlgames)
+        self.has_task = False
+        self.viewer = None
 
         self.num_envs = cfg["env"]["num_envs"]
         self.device_type = cfg.get("device_type", "cuda")
@@ -79,7 +74,6 @@ class HumanoidPHC(BaseTask):
         assert self.humanoid_type == "smpl"
 
         # TODO: parse out the env configs
-        self.xcxc_test_load_config = True  # debug flag.
         self.load_robot_configs(cfg)
 
         self._num_joints = len(self._body_names)
@@ -137,6 +131,8 @@ class HumanoidPHC(BaseTask):
 
         self.control_mode = self.cfg["control"]["control_mode"]
         assert self.control_mode == "isaac_pd"
+        self.control_freq_inv = self.cfg["control"].get("decimation", 2)
+        self.dt = self.control_freq_inv * sim_params.dt
 
         self.plane_static_friction = self.cfg["env"]["plane"]["staticFriction"]
         self.plane_dynamic_friction = self.cfg["env"]["plane"]["dynamicFriction"]
@@ -165,17 +161,34 @@ class HumanoidPHC(BaseTask):
         self.cfg["device_id"] = device_id
         self.cfg["headless"] = headless
 
-        super().__init__(cfg=self.cfg)
-        # super().__init__(
-        #     cfg=self.cfg,
-        #     sim_params=sim_params,
-        #     physics_engine=physics_engine,
-        #     device_type=device_type,
-        #     device_id=device_id,
-        #     headless=headless,
-        # )
+        # Migrating from BaseTask
+        # super().__init__(cfg=self.cfg)
+        self.gym = gymapi.acquire_gym()
 
-        self.dt = self.control_freq_inv * sim_params.dt
+        self.graphics_device_id = -1 if self.headless else self.device_id
+
+        # Duplicate -- clean up
+        self.num_obs = self.get_obs_size()  # = 934, humanoid + amp obs
+        self.num_states = cfg["env"].get("numStates", 0)
+        self.num_actions = self._num_actions
+
+        # allocate buffers
+        self.obs_buf = torch.zeros(
+            (self.num_envs, self.num_obs), device=self.device, dtype=torch.float
+        )
+        self.states_buf = torch.zeros(
+            (self.num_envs, self.num_states), device=self.device, dtype=torch.float
+        )
+        self.rew_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.float)
+        self.reset_buf = torch.ones(self.num_envs, device=self.device, dtype=torch.long)
+        self.progress_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
+        self.randomize_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
+        self.extras = {}
+
+        # create envs, sim and viewer
+        self.create_sim()
+        self.gym.prepare_sim(self.sim)
+
         self._setup_tensors()
 
         # NOTE: This is confusing, but there are two different obs sizes
@@ -728,9 +741,9 @@ class HumanoidPHC(BaseTask):
                 self._pd_action_offset[self._dof_names.index("R_Shoulder") * 3] = -np.pi / 3
                 self._pd_action_offset[self._dof_names.index("R_Shoulder") * 3 + 2] = np.pi / 2
 
-    # NOTE: check the arg i
     def render(self, sync_frame_time=False):
-        super().render(sync_frame_time=sync_frame_time)
+        # No rendering here
+        pass
 
     ####################################################################
 
@@ -928,87 +941,6 @@ class HumanoidPHC(BaseTask):
     def get_motion_lengths(self):
         return self._motion_lib.get_motion_lengths()
 
-    def _record_states(self):
-        super()._record_states()
-        self.state_record["ref_body_pos_subset"].append(self.ref_body_pos_subset.cpu().clone())
-        self.state_record["ref_body_pos_full"].append(self.ref_body_pos.cpu().clone())
-        # self.state_record['ref_dof_pos'].append(self.ref_dof_pos.cpu().clone())
-
-    def _write_states_to_file(self, file_name):
-        self.state_record["skeleton_trees"] = self.skeleton_trees
-        self.state_record["humanoid_betas"] = self.humanoid_shapes
-        print(f"Dumping states into {file_name}")
-
-        progress = torch.stack(self.state_record["progress"], dim=1)
-        progress_diff = torch.cat(
-            [progress, -10 * torch.ones(progress.shape[0], 1).to(progress)], dim=-1
-        )
-
-        diff = torch.abs(progress_diff[:, :-1] - progress_diff[:, 1:])
-        split_idx = torch.nonzero(diff > 1)
-        split_idx[:, 1] += 1
-        data_to_dump = {
-            k: torch.stack(v)
-            for k, v in self.state_record.items()
-            if k not in ["skeleton_trees", "humanoid_betas", "progress"]
-        }
-        fps = 60
-        motion_dict_dump = {}
-        num_for_this_humanoid = 0
-        curr_humanoid_index = 0
-
-        for idx in range(len(split_idx)):
-            split_info = split_idx[idx]
-            humanoid_index = split_info[0]
-
-            if humanoid_index != curr_humanoid_index:
-                num_for_this_humanoid = 0
-                curr_humanoid_index = humanoid_index
-
-            if num_for_this_humanoid == 0:
-                start = 0
-            else:
-                start = split_idx[idx - 1][-1]
-
-            end = split_idx[idx][-1]
-
-            dof_pos_seg = data_to_dump["dof_pos"][start:end, humanoid_index]
-            B, H = dof_pos_seg.shape
-            root_states_seg = data_to_dump["root_states"][start:end, humanoid_index]
-
-            body_quat = torch.cat(
-                [root_states_seg[:, None, 3:7], exp_map_to_quat(dof_pos_seg.reshape(B, -1, 3))],
-                dim=1,
-            )
-            motion_dump = {
-                "skeleton_tree": self.state_record["skeleton_trees"][humanoid_index].to_dict(),
-                "body_quat": body_quat,
-                "trans": root_states_seg[:, :3],
-                "root_states_seg": root_states_seg,
-                "dof_pos": dof_pos_seg,
-            }
-
-            motion_dump["fps"] = fps
-            motion_dump["betas"] = self.humanoid_shapes[humanoid_index].detach().cpu().numpy()
-            motion_dump.update(
-                {
-                    k: v[start:end, humanoid_index]
-                    for k, v in data_to_dump.items()
-                    if k
-                    not in [
-                        "dof_pos",
-                        "root_states",
-                        "skeleton_trees",
-                        "humanoid_betas",
-                        "progress",
-                    ]
-                }
-            )
-            motion_dict_dump[f"{humanoid_index}_{num_for_this_humanoid}"] = motion_dump
-            num_for_this_humanoid += 1
-        joblib.dump(motion_dict_dump, file_name)
-        self.state_record = defaultdict(list)
-
     def begin_seq_motion_samples(self):
         # For evaluation
         self.start_idx = 0
@@ -1034,7 +966,7 @@ class HumanoidPHC(BaseTask):
 
     # TODO: rlgames uses this. Remove this
     def get_running_mean_size(self):
-        return (self.get_obs_size(), )
+        return (self.get_obs_size(),)
 
     def get_obs_size(self):
         # TODO: remove self_obs_v from the config
@@ -1074,6 +1006,18 @@ class HumanoidPHC(BaseTask):
         # Motion imitation, no more blending and only sample at certain locations
         return self._motion_lib.sample_time_interval(motion_ids)
         # return self._motion_lib.sample_time(motion_ids)
+
+    def step(self, actions):
+        # apply actions
+        self.pre_physics_step(actions)
+
+        self._physics_step()
+
+        if self.device == "cpu":
+            self.gym.fetch_results(self.sim, True)
+
+        # compute observations, rewards, resets, ...
+        self.post_physics_step()
 
     def pre_physics_step(self, actions):
         self.actions = actions.to(self.device).clone()
@@ -1656,9 +1600,9 @@ class HumanoidPHC(BaseTask):
 
     def reset(self, env_ids=None):
         safe_reset = (env_ids is None) or len(env_ids) == self.num_envs
-        if (env_ids is None):
+        if env_ids is None:
             env_ids = to_torch(np.arange(self.num_envs), device=self.device, dtype=torch.long)
-        
+
         self._reset_envs(env_ids)
 
         if safe_reset:

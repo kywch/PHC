@@ -87,9 +87,7 @@ class Humanoid(BaseTask):
         self.physics_engine = physics_engine
         self.has_task = False
 
-        # xcxc, testing HumanoidPHC. Remove when done
-        if "xcxc_test_load_config" not in self.__dict__:
-            self.load_humanoid_configs(cfg)
+        self.load_humanoid_configs(cfg)
 
         self.control_mode = self.cfg["control"]["control_mode"]
         if self.control_mode in ['isaac_pd']:
