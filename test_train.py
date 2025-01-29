@@ -12,14 +12,13 @@ import numpy as np
 
 from rl_games.common import env_configurations
 
-from phc.utils.flags import flags
 from phc.utils.config import set_np_formatting, set_seed
 
 from phc.run_hydra import build_alg_runner, RLGPUAlgoObserver, parse_sim_params
 from phc.pufferl.wrappers import VecTaskWrapper
 
 from phc.env.tasks.humanoid_im import HumanoidIm as OrgHumanoidIm  # original
-from phc.pufferl.humanoid_phc import HumanoidPHC
+from phc.pufferl.humanoid_phc import HumanoidPHC, flags
 
 
 env_configurations.register('rlgpu', {'env_creator': lambda **kwargs: create_rlgpu_env(**kwargs), 'vecenv_type': 'RLGPU'})
