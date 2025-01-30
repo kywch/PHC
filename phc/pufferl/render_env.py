@@ -35,12 +35,11 @@ class HumanoidRenderEnv(HumanoidPHC):
         super().__init__(cfg, sim_params, physics_engine, device_type, device_id, headless)
 
         self.state_record = defaultdict(list)
-
         self.enable_viewer_sync = True
         self.paused = False
 
-        # if running with a viewer, set up keyboard shortcuts and camera
-        self.create_viewer()
+        # If running with a viewer, set up keyboard shortcuts and camera
+        self._create_viewer()
 
         # NOTE: server_mode refers to using webcam or motion generator to get motions to imitate
         # Skipping this for now
@@ -52,228 +51,11 @@ class HumanoidRenderEnv(HumanoidPHC):
             self._build_marker_state_tensors()
             self._init_camera()
 
-    def create_viewer(self):
-        if self.viewer:
-            # subscribe to keyboard shortcuts
-            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_ESCAPE, "QUIT")
-            self.gym.subscribe_viewer_keyboard_event(
-                self.viewer, gymapi.KEY_V, "toggle_viewer_sync"
-            )
-            self.gym.subscribe_viewer_keyboard_event(
-                self.viewer, gymapi.KEY_L, "toggle_video_record"
-            )
-            self.gym.subscribe_viewer_keyboard_event(
-                self.viewer, gymapi.KEY_SEMICOLON, "cancel_video_record"
-            )
-            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_R, "reset")
-            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_F, "follow")
-            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_G, "fixed")
-            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_H, "divide_group")
-            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_C, "print_cam")
-            self.gym.subscribe_viewer_keyboard_event(
-                self.viewer, gymapi.KEY_M, "disable_collision_reset"
-            )
-            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_B, "fixed_path")
-            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_N, "real_path")
-            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_K, "show_traj")
-            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_J, "apply_force")
-            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_LEFT, "prev_env")
-            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_RIGHT, "next_env")
-            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_T, "resample_motion")
-            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_Y, "slow_traj")
-            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_I, "trigger_input")
-            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_P, "show_progress")
-            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_O, "change_color")
-
-            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_SPACE, "PAUSE")
-
-            # set the camera position based on up axis
-            sim_params = self.gym.get_sim_params(self.sim)
-            if sim_params.up_axis == gymapi.UP_AXIS_Z:
-                cam_pos = gymapi.Vec3(20.0, 25.0, 3.0)
-                cam_target = gymapi.Vec3(10.0, 15.0, 0.0)
-            else:
-                cam_pos = gymapi.Vec3(20.0, 3.0, 25.0)
-                cam_target = gymapi.Vec3(10.0, 0.0, 15.0)
-
-            self.gym.viewer_camera_look_at(self.viewer, None, cam_pos, cam_target)
-
-        ###### Custom Camera Sensors ######
-        self.recorder_camera_handles = []
-        self.max_num_camera = 10
-        self.viewing_env_idx = 0
-        for idx, env in enumerate(self.envs):
-            self.recorder_camera_handles.append(
-                self.gym.create_camera_sensor(env, gymapi.CameraProperties())
-            )
-            if idx > self.max_num_camera:
-                break
-
-        self.recorder_camera_handle = self.recorder_camera_handles[0]
-        self.recording, self.recording_state_change = False, False
-        self.max_video_queue_size = 100000
-        self._video_queue = deque(maxlen=self.max_video_queue_size)
-        rendering_out = osp.join("output", "renderings")
-        states_out = osp.join("output", "states")
-        os.makedirs(rendering_out, exist_ok=True)
-        os.makedirs(states_out, exist_ok=True)
-        self.cfg_name = self.cfg.exp_name
-        self._video_path = osp.join(rendering_out, f"{self.cfg_name}-%s.mp4")
-        self._states_path = osp.join(states_out, f"{self.cfg_name}-%s.pkl")
-        # self.gym.draw_env_rigid_contacts(self.viewer, self.envs[1], gymapi.Vec3(0.9, 0.3, 0.3), 1.0, True)
-
-    def _init_camera(self):
-        self.gym.refresh_actor_root_state_tensor(self.sim)
-        self._cam_prev_char_pos = self._humanoid_root_states[0, 0:3].cpu().numpy()
-
-        cam_pos = gymapi.Vec3(self._cam_prev_char_pos[0], self._cam_prev_char_pos[1] - 3.0, 1.0)
-        cam_target = gymapi.Vec3(self._cam_prev_char_pos[0], self._cam_prev_char_pos[1], 1.0)
-        if self.viewer:
-            self.gym.viewer_camera_look_at(self.viewer, None, cam_pos, cam_target)
-
-    def _create_envs(self):
-        if self.viewer or flags.server_mode:
-            self._marker_handles = [[] for _ in range(self.num_envs)]
-            self._load_marker_asset()
-
-        if flags.add_proj:
-            self._proj_handles = []
-            self._load_proj_asset()
-
-        super()._create_envs()
-
-    def _load_marker_asset(self):
-        asset_root = str(PHC_ROOT / "phc/data/assets/urdf/")
-
-        asset_options = gymapi.AssetOptions()
-        asset_options.angular_damping = 0.0
-        asset_options.linear_damping = 0.0
-        asset_options.max_angular_velocity = 0.0
-        asset_options.density = 0
-        asset_options.fix_base_link = True
-        asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
-
-        self._marker_asset = self.gym.load_asset(
-            self.sim, asset_root, "traj_marker.urdf", asset_options
-        )
-        self._marker_asset_small = self.gym.load_asset(
-            self.sim, asset_root, "traj_marker_small.urdf", asset_options
-        )
-
-    def _load_proj_asset(self):
-        asset_root = PHC_ROOT / "phc/data/assets/urdf/"
-
-        small_asset_file = "block_projectile.urdf"
-        # small_asset_file = "ball_medium.urdf"
-        small_asset_options = gymapi.AssetOptions()
-        small_asset_options.angular_damping = 0.01
-        small_asset_options.linear_damping = 0.01
-        small_asset_options.max_angular_velocity = 100.0
-        small_asset_options.density = 10000000.0
-        # small_asset_options.fix_base_link = True
-        small_asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
-        self._small_proj_asset = self.gym.load_asset(
-            self.sim, asset_root, small_asset_file, small_asset_options
-        )
-
-        large_asset_file = "block_projectile_large.urdf"
-        large_asset_options = gymapi.AssetOptions()
-        large_asset_options.angular_damping = 0.01
-        large_asset_options.linear_damping = 0.01
-        large_asset_options.max_angular_velocity = 100.0
-        large_asset_options.density = 10000000.0
-        # large_asset_options.fix_base_link = True
-        large_asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
-        self._large_proj_asset = self.gym.load_asset(
-            self.sim, asset_root, large_asset_file, large_asset_options
-        )
-
-    def _build_single_env(self, env_id, env_ptr, humanoid_asset, dof_prop):
-        super()._build_single_env(env_id, env_ptr, humanoid_asset, dof_prop)
-
-        if self.viewer or flags.server_mode:
-            self._build_marker(env_id, env_ptr)
-
-        if flags.add_proj:
-            self._build_proj(env_id, env_ptr)
-
-    def _build_marker(self, env_id, env_ptr):
-        default_pose = gymapi.Transform()
-        for i in range(self.num_bodies):
-            marker_handle = self.gym.create_actor(
-                env_ptr, self._marker_asset, default_pose, "marker", self.num_envs + 10, 1, 0
-            )
-
-            if i in self._track_bodies_id:
-                self.gym.set_rigid_body_color(
-                    env_ptr, marker_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(0.8, 0.0, 0.0)
-                )
-            else:
-                self.gym.set_rigid_body_color(
-                    env_ptr, marker_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(1.0, 1.0, 1.0)
-                )
-            self._marker_handles[env_id].append(marker_handle)
-
-    def _build_proj(self, env_id, env_ptr):
-        pos = [
-            [-0.01, 0.3, 0.4],
-            # [ 0.0890016, -0.40830246, 0.25]
-        ]
-        for i, obj in enumerate(PERTURB_OBJS):
-            default_pose = gymapi.Transform()
-            default_pose.p.x = pos[i][0]
-            default_pose.p.y = pos[i][1]
-            default_pose.p.z = pos[i][2]
-            obj_type = obj[0]
-            if obj_type == "small":
-                proj_asset = self._small_proj_asset
-            elif obj_type == "large":
-                proj_asset = self._large_proj_asset
-
-            proj_handle = self.gym.create_actor(
-                env_ptr, proj_asset, default_pose, "proj{:d}".format(i), env_id, 2
-            )
-            self._proj_handles.append(proj_handle)
-
-    def _build_marker_state_tensors(self):
-        num_actors = self._root_states.shape[0] // self.num_envs
-        self._marker_states = self._root_states.view(
-            self.num_envs, num_actors, self._root_states.shape[-1]
-        )[..., 1 : (1 + self.num_bodies), :]
-        self._marker_pos = self._marker_states[..., :3]
-        self._marker_rotation = self._marker_states[..., 3:7]
-
-        self._marker_actor_ids = self._humanoid_actor_ids.unsqueeze(-1) + to_torch(
-            self._marker_handles, dtype=torch.int32, device=self.device
-        )
-        self._marker_actor_ids = self._marker_actor_ids.flatten()
-
-    ####################################################################
-    # Render-related??
-
-    def pause_func(self, action):
-        self.paused = not self.paused
-
-    def next_func(self, action):
-        self.resample_motions()
-
-    def reset_func(self, action):
-        self.reset()
-
-    def record_func(self, action):
-        self.recording = not self.recording
-        self.recording_state_change_o3d = True
-        self.recording_state_change_o3d_img = True
-        self.recording_state_change = True  # only intialize from o3d.
-
-    def hide_ref(self, action):
-        flags.show_traj = not flags.show_traj
-
     def _physics_step(self):
         super()._physics_step()
         self.render()
 
-    def render(self, sync_frame_time=False):
+    def render(self):
         if not self.viewer:
             return
 
@@ -332,12 +114,8 @@ class HumanoidRenderEnv(HumanoidPHC):
             elif evt.action == "show_progress" and evt.value > 0:
                 print("Progress ", self.progress_buf)
             elif evt.action == "apply_force" and evt.value > 0:
-                forces = torch.zeros(
-                    (1, self._rigid_body_state.shape[0], 3), device=self.device, dtype=torch.float
-                )
-                torques = torch.zeros(
-                    (1, self._rigid_body_state.shape[0], 3), device=self.device, dtype=torch.float
-                )
+                forces = torch.zeros((1, self._rigid_body_state.shape[0], 3), device=self.device, dtype=torch.float)
+                torques = torch.zeros((1, self._rigid_body_state.shape[0], 3), device=self.device, dtype=torch.float)
                 # forces[:, 8, :] = -800
                 for i in range(self._rigid_body_state.shape[0] // self.num_bodies):
                     forces[:, i * self.num_bodies + 3, :] = -3500
@@ -375,9 +153,7 @@ class HumanoidRenderEnv(HumanoidPHC):
                     del self.writer
 
                 self._write_states_to_file(self.curr_states_file_name)
-                print(
-                    f"============ Video finished writing {self.curr_states_file_name}============"
-                )
+                print(f"============ Video finished writing {self.curr_states_file_name}============")
             else:
                 print("============ Writing video ============")
             self.recording_state_change = False
@@ -417,6 +193,186 @@ class HumanoidRenderEnv(HumanoidPHC):
         else:
             self.gym.poll_viewer_events(self.viewer)
 
+    #####################################################################
+    ### __init__()
+    #####################################################################
+
+    def _create_viewer(self):
+        if self.viewer:
+            # subscribe to keyboard shortcuts
+            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_ESCAPE, "QUIT")
+            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_V, "toggle_viewer_sync")
+            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_L, "toggle_video_record")
+            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_SEMICOLON, "cancel_video_record")
+            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_R, "reset")
+            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_F, "follow")
+            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_G, "fixed")
+            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_H, "divide_group")
+            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_C, "print_cam")
+            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_M, "disable_collision_reset")
+            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_B, "fixed_path")
+            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_N, "real_path")
+            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_K, "show_traj")
+            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_J, "apply_force")
+            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_LEFT, "prev_env")
+            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_RIGHT, "next_env")
+            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_T, "resample_motion")
+            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_Y, "slow_traj")
+            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_I, "trigger_input")
+            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_P, "show_progress")
+            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_O, "change_color")
+
+            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_SPACE, "PAUSE")
+
+            # set the camera position based on up axis
+            sim_params = self.gym.get_sim_params(self.sim)
+            if sim_params.up_axis == gymapi.UP_AXIS_Z:
+                cam_pos = gymapi.Vec3(20.0, 25.0, 3.0)
+                cam_target = gymapi.Vec3(10.0, 15.0, 0.0)
+            else:
+                cam_pos = gymapi.Vec3(20.0, 3.0, 25.0)
+                cam_target = gymapi.Vec3(10.0, 0.0, 15.0)
+
+            self.gym.viewer_camera_look_at(self.viewer, None, cam_pos, cam_target)
+
+        ###### Custom Camera Sensors ######
+        self.recorder_camera_handles = []
+        self.max_num_camera = 10
+        self.viewing_env_idx = 0
+        for idx, env in enumerate(self.envs):
+            self.recorder_camera_handles.append(self.gym.create_camera_sensor(env, gymapi.CameraProperties()))
+            if idx > self.max_num_camera:
+                break
+
+        self.recorder_camera_handle = self.recorder_camera_handles[0]
+        self.recording, self.recording_state_change = False, False
+        self.max_video_queue_size = 100000
+        self._video_queue = deque(maxlen=self.max_video_queue_size)
+        rendering_out = osp.join("output", "renderings")
+        states_out = osp.join("output", "states")
+        os.makedirs(rendering_out, exist_ok=True)
+        os.makedirs(states_out, exist_ok=True)
+        self.cfg_name = self.cfg.exp_name
+        self._video_path = osp.join(rendering_out, f"{self.cfg_name}-%s.mp4")
+        self._states_path = osp.join(states_out, f"{self.cfg_name}-%s.pkl")
+        # self.gym.draw_env_rigid_contacts(self.viewer, self.envs[1], gymapi.Vec3(0.9, 0.3, 0.3), 1.0, True)
+
+    def _init_camera(self):
+        self.gym.refresh_actor_root_state_tensor(self.sim)
+        self._cam_prev_char_pos = self._humanoid_root_states[0, 0:3].cpu().numpy()
+
+        cam_pos = gymapi.Vec3(self._cam_prev_char_pos[0], self._cam_prev_char_pos[1] - 3.0, 1.0)
+        cam_target = gymapi.Vec3(self._cam_prev_char_pos[0], self._cam_prev_char_pos[1], 1.0)
+        if self.viewer:
+            self.gym.viewer_camera_look_at(self.viewer, None, cam_pos, cam_target)
+
+    def _create_envs(self):
+        if self.viewer or flags.server_mode:
+            self._marker_handles = [[] for _ in range(self.num_envs)]
+            self._load_marker_asset()
+
+        if flags.add_proj:
+            self._proj_handles = []
+            self._load_proj_asset()
+
+        super()._create_envs()
+
+    def _load_marker_asset(self):
+        asset_root = str(PHC_ROOT / "phc/data/assets/urdf/")
+
+        asset_options = gymapi.AssetOptions()
+        asset_options.angular_damping = 0.0
+        asset_options.linear_damping = 0.0
+        asset_options.max_angular_velocity = 0.0
+        asset_options.density = 0
+        asset_options.fix_base_link = True
+        asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
+
+        self._marker_asset = self.gym.load_asset(self.sim, asset_root, "traj_marker.urdf", asset_options)
+        self._marker_asset_small = self.gym.load_asset(self.sim, asset_root, "traj_marker_small.urdf", asset_options)
+
+    def _load_proj_asset(self):
+        asset_root = PHC_ROOT / "phc/data/assets/urdf/"
+
+        small_asset_file = "block_projectile.urdf"
+        # small_asset_file = "ball_medium.urdf"
+        small_asset_options = gymapi.AssetOptions()
+        small_asset_options.angular_damping = 0.01
+        small_asset_options.linear_damping = 0.01
+        small_asset_options.max_angular_velocity = 100.0
+        small_asset_options.density = 10000000.0
+        # small_asset_options.fix_base_link = True
+        small_asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
+        self._small_proj_asset = self.gym.load_asset(self.sim, asset_root, small_asset_file, small_asset_options)
+
+        large_asset_file = "block_projectile_large.urdf"
+        large_asset_options = gymapi.AssetOptions()
+        large_asset_options.angular_damping = 0.01
+        large_asset_options.linear_damping = 0.01
+        large_asset_options.max_angular_velocity = 100.0
+        large_asset_options.density = 10000000.0
+        # large_asset_options.fix_base_link = True
+        large_asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
+        self._large_proj_asset = self.gym.load_asset(self.sim, asset_root, large_asset_file, large_asset_options)
+
+    def _build_single_env(self, env_id, env_ptr, humanoid_asset, dof_prop):
+        super()._build_single_env(env_id, env_ptr, humanoid_asset, dof_prop)
+
+        if self.viewer or flags.server_mode:
+            self._build_marker(env_id, env_ptr)
+
+        if flags.add_proj:
+            self._build_proj(env_id, env_ptr)
+
+    def _build_marker(self, env_id, env_ptr):
+        default_pose = gymapi.Transform()
+        for i in range(self.num_bodies):
+            marker_handle = self.gym.create_actor(
+                env_ptr, self._marker_asset, default_pose, "marker", self.num_envs + 10, 1, 0
+            )
+
+            if i in self._track_bodies_id:
+                self.gym.set_rigid_body_color(env_ptr, marker_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(0.8, 0.0, 0.0))
+            else:
+                self.gym.set_rigid_body_color(env_ptr, marker_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(1.0, 1.0, 1.0))
+            self._marker_handles[env_id].append(marker_handle)
+
+    def _build_proj(self, env_id, env_ptr):
+        pos = [
+            [-0.01, 0.3, 0.4],
+            # [ 0.0890016, -0.40830246, 0.25]
+        ]
+        for i, obj in enumerate(PERTURB_OBJS):
+            default_pose = gymapi.Transform()
+            default_pose.p.x = pos[i][0]
+            default_pose.p.y = pos[i][1]
+            default_pose.p.z = pos[i][2]
+            obj_type = obj[0]
+            if obj_type == "small":
+                proj_asset = self._small_proj_asset
+            elif obj_type == "large":
+                proj_asset = self._large_proj_asset
+
+            proj_handle = self.gym.create_actor(env_ptr, proj_asset, default_pose, "proj{:d}".format(i), env_id, 2)
+            self._proj_handles.append(proj_handle)
+
+    def _build_marker_state_tensors(self):
+        num_actors = self._root_states.shape[0] // self.num_envs
+        self._marker_states = self._root_states.view(self.num_envs, num_actors, self._root_states.shape[-1])[
+            ..., 1 : (1 + self.num_bodies), :
+        ]
+        self._marker_pos = self._marker_states[..., :3]
+        self._marker_rotation = self._marker_states[..., 3:7]
+
+        self._marker_actor_ids = self._humanoid_actor_ids.unsqueeze(-1) + to_torch(
+            self._marker_handles, dtype=torch.int32, device=self.device
+        )
+        self._marker_actor_ids = self._marker_actor_ids.flatten()
+
+    #####################################################################
+    ### render()
+    #####################################################################
+
     def change_char_color(self):
         colors = []
         offset = np.random.randint(0, 10)
@@ -450,13 +406,9 @@ class HumanoidRenderEnv(HumanoidPHC):
         cam_delta = cam_pos - self._cam_prev_char_pos
 
         new_cam_target = gymapi.Vec3(char_root_pos[0], char_root_pos[1], 1.0)
-        new_cam_pos = gymapi.Vec3(
-            char_root_pos[0] + cam_delta[0], char_root_pos[1] + cam_delta[1], cam_pos[2]
-        )
+        new_cam_pos = gymapi.Vec3(char_root_pos[0] + cam_delta[0], char_root_pos[1] + cam_delta[1], cam_pos[2])
 
-        self.gym.set_camera_location(
-            self.recorder_camera_handle, self.envs[0], new_cam_pos, new_cam_target
-        )
+        self.gym.set_camera_location(self.recorder_camera_handle, self.envs[0], new_cam_pos, new_cam_target)
 
         if self.viewer:
             self.gym.viewer_camera_look_at(self.viewer, None, new_cam_pos, new_cam_target)
@@ -466,9 +418,7 @@ class HumanoidRenderEnv(HumanoidPHC):
     def _update_marker(self):
         if flags.show_traj:
             motion_times = (
-                (self.progress_buf + 1) * self.dt
-                + self._motion_start_times
-                + self._motion_start_times_offset
+                (self.progress_buf + 1) * self.dt + self._motion_start_times + self._motion_start_times_offset
             )  # + 1 for target.
             motion_res = self._get_state_from_motionlib_cache(
                 self._sampled_motion_ids, motion_times, self._global_offset
@@ -510,9 +460,7 @@ class HumanoidRenderEnv(HumanoidPHC):
             if flags.real_traj:
                 self._marker_pos[:] = 1000
 
-            self._marker_pos[..., self._track_bodies_id, :] = ref_rb_pos[
-                ..., self._track_bodies_id, :
-            ]
+            self._marker_pos[..., self._track_bodies_id, :] = ref_rb_pos[..., self._track_bodies_id, :]
 
         else:
             self._marker_pos[:] = 1000
@@ -542,9 +490,7 @@ class HumanoidRenderEnv(HumanoidPHC):
         grid_x, grid_y = torch.meshgrid(x, y)
 
         self.num_root_points = grid_x.numel()
-        points = torch.zeros(
-            self.num_envs, self.num_root_points, 3, device=self.device, requires_grad=False
-        )
+        points = torch.zeros(self.num_envs, self.num_root_points, 3, device=self.device, requires_grad=False)
         points[:, :, 0] = grid_x.flatten()
         points[:, :, 1] = grid_y.flatten()
         return points
@@ -560,9 +506,7 @@ class HumanoidRenderEnv(HumanoidPHC):
         print(f"Dumping states into {file_name}")
 
         progress = torch.stack(self.state_record["progress"], dim=1)
-        progress_diff = torch.cat(
-            [progress, -10 * torch.ones(progress.shape[0], 1).to(progress)], dim=-1
-        )
+        progress_diff = torch.cat([progress, -10 * torch.ones(progress.shape[0], 1).to(progress)], dim=-1)
 
         diff = torch.abs(progress_diff[:, :-1] - progress_diff[:, 1:])
         split_idx = torch.nonzero(diff > 1)

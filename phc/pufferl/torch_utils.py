@@ -29,7 +29,6 @@
 from typing import List, Optional
 
 import torch
-import numpy as np
 
 
 def to_torch(x, dtype=torch.float, device="cuda:0", requires_grad=False):

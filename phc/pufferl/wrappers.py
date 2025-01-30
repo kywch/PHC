@@ -17,16 +17,10 @@ class VecTaskWrapper:
         self.num_states = task.num_states
         self.num_actions = task.num_actions
 
-        self.obs_space = spaces.Box(np.ones(self.num_obs) * -np.Inf, np.ones(self.num_obs) * np.Inf)
-        self.state_space = spaces.Box(
-            np.ones(self.num_states) * -np.Inf, np.ones(self.num_states) * np.Inf
-        )
-        self.act_space = spaces.Box(
-            np.ones(self.num_actions) * -1.0, np.ones(self.num_actions) * 1.0
-        )
-        self._amp_obs_space = spaces.Box(
-            np.ones(task.num_amp_obs) * -np.Inf, np.ones(task.num_amp_obs) * np.Inf
-        )
+        self.obs_space = self.task.single_observation_space
+        self._amp_obs_space = self.task.amp_observation_space
+        self.act_space = self.task.single_action_space
+        self.state_space = spaces.Box(np.ones(self.num_states) * -np.Inf, np.ones(self.num_states) * np.Inf)
 
     def get_number_of_agents(self):
         return self.num_agents
@@ -55,24 +49,19 @@ class VecTaskWrapper:
     def amp_observation_space(self):
         return self._amp_obs_space
 
-    def _clip_buffer(self, buffer):
+    def _clip_obs(self, buffer):
         return torch.clamp(buffer, -self.clip_obs, self.clip_obs).to(self.rl_device)
 
     def reset(self, env_ids=None):
-        self.task.reset(env_ids)
-        return self._clip_buffer(self.task.obs_buf)
-
-    def get_state(self):
-        return self._clip_buffer(self.task.states_buf)
+        obs = self.task.reset(env_ids)
+        return self._clip_obs(obs)
 
     def step(self, actions):
-        self.task.step(actions)
-
-        obs = self._clip_buffer(self.task.obs_buf)
-        rew = self.task.rew_buf.to(self.rl_device)
-        done = self.task.reset_buf.to(self.rl_device)
-        info = self.task.extras
-        return obs, rew, done, info
+        obs, rew, done, info = self.task.step(actions)
+        return self._clip_obs(obs), rew, done, info
 
     def fetch_amp_obs_demo(self, num_samples):
         return self.task.fetch_amp_obs_demo(num_samples)
+
+    def get_state(self):
+        return self._clip_obs(self.task.states_buf)
