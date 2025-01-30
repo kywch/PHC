@@ -36,16 +36,6 @@ def to_torch(x, dtype=torch.float, device="cuda:0", requires_grad=False):
     return torch.tensor(x, dtype=dtype, device=device, requires_grad=requires_grad)
 
 
-def get_axis_params(value, axis_idx, x_value=0.0, dtype=float, n_dims=3):
-    """construct arguments to `Vec` according to axis index."""
-    zs = np.zeros((n_dims,))
-    assert axis_idx < n_dims, "the axis dim should be within the vector dimensions"
-    zs[axis_idx] = 1.0
-    params = np.where(zs == 1.0, value, zs)
-    params[0] = x_value
-    return list(params.astype(dtype))
-
-
 @torch.jit.script
 def torch_rand_float(lower, upper, shape, device):
     # type: (float, float, Tuple[int, int], str) -> Tensor

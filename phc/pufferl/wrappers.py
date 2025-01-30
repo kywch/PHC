@@ -25,7 +25,7 @@ class VecTaskWrapper:
             np.ones(self.num_actions) * -1.0, np.ones(self.num_actions) * 1.0
         )
         self._amp_obs_space = spaces.Box(
-            np.ones(task.get_num_amp_obs()) * -np.Inf, np.ones(task.get_num_amp_obs()) * np.Inf
+            np.ones(task.num_amp_obs) * -np.Inf, np.ones(task.num_amp_obs) * np.Inf
         )
 
     def get_number_of_agents(self):

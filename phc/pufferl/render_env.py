@@ -37,7 +37,6 @@ class HumanoidRenderEnv(HumanoidPHC):
         self.state_record = defaultdict(list)
 
         self.enable_viewer_sync = True
-        self.viewer = None
         self.paused = False
 
         # if running with a viewer, set up keyboard shortcuts and camera
@@ -49,138 +48,13 @@ class HumanoidRenderEnv(HumanoidPHC):
         #     # bgsk = threading.Thread(target=self.setup_video_client, daemon=True).start()
         #     bgsk = threading.Thread(target=self.setup_talk_client, daemon=False).start()
 
-        if not self.headless or flags.server_mode:
+        if self.viewer or flags.server_mode:
             self._build_marker_state_tensors()
-
-        if self.viewer is not None or flags.server_mode:
             self._init_camera()
 
-    def _create_envs(self, num_envs, spacing, num_per_row):
-        if not self.headless or flags.server_mode:
-            self._marker_handles = [[] for _ in range(num_envs)]
-            self._load_marker_asset()
-
-        if flags.add_proj:
-            self._proj_handles = []
-            self._load_proj_asset()
-
-        super()._create_envs(num_envs, spacing, num_per_row)
-
-    def _load_marker_asset(self):
-        asset_root = str(PHC_ROOT / "phc/data/assets/urdf/")
-
-        asset_options = gymapi.AssetOptions()
-        asset_options.angular_damping = 0.0
-        asset_options.linear_damping = 0.0
-        asset_options.max_angular_velocity = 0.0
-        asset_options.density = 0
-        asset_options.fix_base_link = True
-        asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
-
-        self._marker_asset = self.gym.load_asset(
-            self.sim, asset_root, "traj_marker.urdf", asset_options
-        )
-        self._marker_asset_small = self.gym.load_asset(
-            self.sim, asset_root, "traj_marker_small.urdf", asset_options
-        )
-
-    def _load_proj_asset(self):
-        asset_root = PHC_ROOT / "phc/data/assets/urdf/"
-
-        small_asset_file = "block_projectile.urdf"
-        # small_asset_file = "ball_medium.urdf"
-        small_asset_options = gymapi.AssetOptions()
-        small_asset_options.angular_damping = 0.01
-        small_asset_options.linear_damping = 0.01
-        small_asset_options.max_angular_velocity = 100.0
-        small_asset_options.density = 10000000.0
-        # small_asset_options.fix_base_link = True
-        small_asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
-        self._small_proj_asset = self.gym.load_asset(
-            self.sim, asset_root, small_asset_file, small_asset_options
-        )
-
-        large_asset_file = "block_projectile_large.urdf"
-        large_asset_options = gymapi.AssetOptions()
-        large_asset_options.angular_damping = 0.01
-        large_asset_options.linear_damping = 0.01
-        large_asset_options.max_angular_velocity = 100.0
-        large_asset_options.density = 10000000.0
-        # large_asset_options.fix_base_link = True
-        large_asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
-        self._large_proj_asset = self.gym.load_asset(
-            self.sim, asset_root, large_asset_file, large_asset_options
-        )
-
-    def _build_env(self, env_id, env_ptr, humanoid_asset):
-        super()._build_env(env_id, env_ptr, humanoid_asset)
-
-        if not self.headless or flags.server_mode:
-            self._build_marker(env_id, env_ptr)
-
-        if flags.add_proj:
-            self._build_proj(env_id, env_ptr)
-
-    def _build_marker(self, env_id, env_ptr):
-        default_pose = gymapi.Transform()
-        for i in range(self._num_joints):
-            marker_handle = self.gym.create_actor(
-                env_ptr, self._marker_asset, default_pose, "marker", self.num_envs + 10, 1, 0
-            )
-
-            if i in self._track_bodies_id:
-                self.gym.set_rigid_body_color(
-                    env_ptr, marker_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(0.8, 0.0, 0.0)
-                )
-            else:
-                self.gym.set_rigid_body_color(
-                    env_ptr, marker_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(1.0, 1.0, 1.0)
-                )
-            self._marker_handles[env_id].append(marker_handle)
-
-    def _build_proj(self, env_id, env_ptr):
-        pos = [
-            [-0.01, 0.3, 0.4],
-            # [ 0.0890016, -0.40830246, 0.25]
-        ]
-        for i, obj in enumerate(PERTURB_OBJS):
-            default_pose = gymapi.Transform()
-            default_pose.p.x = pos[i][0]
-            default_pose.p.y = pos[i][1]
-            default_pose.p.z = pos[i][2]
-            obj_type = obj[0]
-            if obj_type == "small":
-                proj_asset = self._small_proj_asset
-            elif obj_type == "large":
-                proj_asset = self._large_proj_asset
-
-            proj_handle = self.gym.create_actor(
-                env_ptr, proj_asset, default_pose, "proj{:d}".format(i), env_id, 2
-            )
-            self._proj_handles.append(proj_handle)
-
-    def _build_marker_state_tensors(self):
-        num_actors = self._root_states.shape[0] // self.num_envs
-        self._marker_states = self._root_states.view(
-            self.num_envs, num_actors, self._root_states.shape[-1]
-        )[..., 1 : (1 + self._num_joints), :]
-        self._marker_pos = self._marker_states[..., :3]
-        self._marker_rotation = self._marker_states[..., 3:7]
-
-        self._marker_actor_ids = self._humanoid_actor_ids.unsqueeze(-1) + to_torch(
-            self._marker_handles, dtype=torch.int32, device=self.device
-        )
-        self._marker_actor_ids = self._marker_actor_ids.flatten()
-
     def create_viewer(self):
-        if not self.headless:
-            # headless server mode will use the smart display
-
+        if self.viewer:
             # subscribe to keyboard shortcuts
-            camera_props = gymapi.CameraProperties()
-            camera_props.width = 1600
-            camera_props.height = 900
-            self.viewer = self.gym.create_viewer(self.sim, camera_props)
             self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_ESCAPE, "QUIT")
             self.gym.subscribe_viewer_keyboard_event(
                 self.viewer, gymapi.KEY_V, "toggle_viewer_sync"
@@ -257,8 +131,125 @@ class HumanoidRenderEnv(HumanoidPHC):
         if self.viewer:
             self.gym.viewer_camera_look_at(self.viewer, None, cam_pos, cam_target)
 
+    def _create_envs(self):
+        if self.viewer or flags.server_mode:
+            self._marker_handles = [[] for _ in range(self.num_envs)]
+            self._load_marker_asset()
+
+        if flags.add_proj:
+            self._proj_handles = []
+            self._load_proj_asset()
+
+        super()._create_envs()
+
+    def _load_marker_asset(self):
+        asset_root = str(PHC_ROOT / "phc/data/assets/urdf/")
+
+        asset_options = gymapi.AssetOptions()
+        asset_options.angular_damping = 0.0
+        asset_options.linear_damping = 0.0
+        asset_options.max_angular_velocity = 0.0
+        asset_options.density = 0
+        asset_options.fix_base_link = True
+        asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
+
+        self._marker_asset = self.gym.load_asset(
+            self.sim, asset_root, "traj_marker.urdf", asset_options
+        )
+        self._marker_asset_small = self.gym.load_asset(
+            self.sim, asset_root, "traj_marker_small.urdf", asset_options
+        )
+
+    def _load_proj_asset(self):
+        asset_root = PHC_ROOT / "phc/data/assets/urdf/"
+
+        small_asset_file = "block_projectile.urdf"
+        # small_asset_file = "ball_medium.urdf"
+        small_asset_options = gymapi.AssetOptions()
+        small_asset_options.angular_damping = 0.01
+        small_asset_options.linear_damping = 0.01
+        small_asset_options.max_angular_velocity = 100.0
+        small_asset_options.density = 10000000.0
+        # small_asset_options.fix_base_link = True
+        small_asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
+        self._small_proj_asset = self.gym.load_asset(
+            self.sim, asset_root, small_asset_file, small_asset_options
+        )
+
+        large_asset_file = "block_projectile_large.urdf"
+        large_asset_options = gymapi.AssetOptions()
+        large_asset_options.angular_damping = 0.01
+        large_asset_options.linear_damping = 0.01
+        large_asset_options.max_angular_velocity = 100.0
+        large_asset_options.density = 10000000.0
+        # large_asset_options.fix_base_link = True
+        large_asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
+        self._large_proj_asset = self.gym.load_asset(
+            self.sim, asset_root, large_asset_file, large_asset_options
+        )
+
+    def _build_single_env(self, env_id, env_ptr, humanoid_asset, dof_prop):
+        super()._build_single_env(env_id, env_ptr, humanoid_asset, dof_prop)
+
+        if self.viewer or flags.server_mode:
+            self._build_marker(env_id, env_ptr)
+
+        if flags.add_proj:
+            self._build_proj(env_id, env_ptr)
+
+    def _build_marker(self, env_id, env_ptr):
+        default_pose = gymapi.Transform()
+        for i in range(self.num_bodies):
+            marker_handle = self.gym.create_actor(
+                env_ptr, self._marker_asset, default_pose, "marker", self.num_envs + 10, 1, 0
+            )
+
+            if i in self._track_bodies_id:
+                self.gym.set_rigid_body_color(
+                    env_ptr, marker_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(0.8, 0.0, 0.0)
+                )
+            else:
+                self.gym.set_rigid_body_color(
+                    env_ptr, marker_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(1.0, 1.0, 1.0)
+                )
+            self._marker_handles[env_id].append(marker_handle)
+
+    def _build_proj(self, env_id, env_ptr):
+        pos = [
+            [-0.01, 0.3, 0.4],
+            # [ 0.0890016, -0.40830246, 0.25]
+        ]
+        for i, obj in enumerate(PERTURB_OBJS):
+            default_pose = gymapi.Transform()
+            default_pose.p.x = pos[i][0]
+            default_pose.p.y = pos[i][1]
+            default_pose.p.z = pos[i][2]
+            obj_type = obj[0]
+            if obj_type == "small":
+                proj_asset = self._small_proj_asset
+            elif obj_type == "large":
+                proj_asset = self._large_proj_asset
+
+            proj_handle = self.gym.create_actor(
+                env_ptr, proj_asset, default_pose, "proj{:d}".format(i), env_id, 2
+            )
+            self._proj_handles.append(proj_handle)
+
+    def _build_marker_state_tensors(self):
+        num_actors = self._root_states.shape[0] // self.num_envs
+        self._marker_states = self._root_states.view(
+            self.num_envs, num_actors, self._root_states.shape[-1]
+        )[..., 1 : (1 + self.num_bodies), :]
+        self._marker_pos = self._marker_states[..., :3]
+        self._marker_rotation = self._marker_states[..., 3:7]
+
+        self._marker_actor_ids = self._humanoid_actor_ids.unsqueeze(-1) + to_torch(
+            self._marker_handles, dtype=torch.int32, device=self.device
+        )
+        self._marker_actor_ids = self._marker_actor_ids.flatten()
+
     ####################################################################
-    # Render-related
+    # Render-related??
 
     def pause_func(self, action):
         self.paused = not self.paused
@@ -282,10 +273,12 @@ class HumanoidRenderEnv(HumanoidPHC):
         super()._physics_step()
         self.render()
 
-    # NOTE: check the arg i
     def render(self, sync_frame_time=False):
+        if not self.viewer:
+            return
+
         # check for window closed
-        if self.viewer and self.gym.query_viewer_has_closed(self.viewer):
+        if self.gym.query_viewer_has_closed(self.viewer):
             sys.exit()
 
         if self.viewer or flags.server_mode:
