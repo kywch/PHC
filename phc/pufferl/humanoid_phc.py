@@ -55,10 +55,6 @@ class IsaacGymBase:
         compute_device = -1 if "cuda" not in self.device else device_id
         graphics_device = -1 if headless else compute_device
 
-        # optimization flags for pytorch JIT
-        torch._C._jit_set_profiling_mode(False)
-        torch._C._jit_set_profiling_executor(False)
-
         # Sim params: keep these hardcoded here for now
         sim_params = gymapi.SimParams()
 
@@ -151,6 +147,10 @@ class HumanoidPHC:
         self.sim_params = self.isaac_base.sim_params
         self.control_freq_inv = self.isaac_base.control_freq_inv
         self.dt = self.isaac_base.dt
+
+        # optimization flags for pytorch JIT
+        torch._C._jit_set_profiling_mode(False)
+        torch._C._jit_set_profiling_executor(False)
 
         ##########################
         self.cfg = cfg
@@ -1613,6 +1613,11 @@ class HumanoidPHC:
             start_idx=self._motion_sample_start_idx,
         )
         self.reset()
+
+    # TODO: Remove this. Used by rl-games
+    @property
+    def start_idx(self):
+        return self._motion_sample_start_idx
 
 
 #####################################################################
