@@ -40,14 +40,15 @@ class StateInit(Enum):
 class IsaacGymBase:
     def __init__(
         self,
-        physics_engine=gymapi.SIM_PHYSX,
-        device_type="cuda",
-        device_id=0,  # Allow multi-gpu setting
-        headless=True,
+        physics_engine,
+        device_type,
+        device_id,  # Allow multi-gpu setting
+        headless,
         sim_timestep=1.0 / 60.0,
         control_freq_inv=2,
     ):
         assert physics_engine == gymapi.SIM_PHYSX, "Only PhysX is supported"
+        assert device_type in ["cpu", "cuda"], "Device type must be cpu or cuda"
 
         if device_type == "cuda":
             assert torch.cuda.is_available(), "CUDA is not available"
@@ -105,7 +106,10 @@ class IsaacGymBase:
             cam_target = gymapi.Vec3(10.0, 15.0, 0.0)
             self.gym.viewer_camera_look_at(self.viewer, None, cam_pos, cam_target)
 
-    def step(self):
+    def reset(self):
+        pass
+
+    def step(self, actions):
         for _ in range(self.control_freq_inv):
             self.gym.simulate(self.sim)
 
@@ -133,9 +137,21 @@ class IsaacGymBase:
         else:
             self.gym.poll_viewer_events(self.viewer)
 
+    def close(self):
+        self.gym.destroy_viewer(self.viewer)
+        self.gym.destroy_sim(self.sim)
+
 
 class HumanoidPHC:
-    def __init__(self, cfg, sim_params, physics_engine, device_type, device_id, headless):
+    def __init__(
+        self,
+        cfg,
+        sim_params=None,
+        physics_engine=gymapi.SIM_PHYSX,
+        device_type="cuda",
+        device_id=0,  # Allow multi-gpu setting
+        headless=True,
+    ):
         # NOTE: Calling without sim_params should work fine for now
         self.isaac_base = IsaacGymBase(physics_engine, device_type, device_id, headless)
 
@@ -299,6 +315,9 @@ class HumanoidPHC:
         if self.viewer:
             self.isaac_base.render()
 
+    def close(self):
+        self.isaac_base.close()
+
     #####################################################################
     ### __init__()
     #####################################################################
@@ -309,7 +328,7 @@ class HumanoidPHC:
         self.humanoid_type = "smpl"
 
         ### Load from config
-        robot_conf = self.cfg["robot"]
+        robot_conf = self.cfg.get("robot", {})
 
         # For SMPL PHC, the below are different from the default
         self._has_self_collision = robot_conf.get("has_self_collision", False)  # is True
@@ -443,10 +462,10 @@ class HumanoidPHC:
         self._root_height_obs = True
         self.num_states = 0  # cfg["env"].get("numStates", 0)  # Not used for PHC
 
-        self.key_bodies = env_config["key_bodies"]
+        self.key_bodies = env_config.get("key_bodies", ["R_Ankle", "L_Ankle", "R_Wrist", "L_Wrist"])
         self._key_body_ids = self._build_body_ids_tensor(self.key_bodies)
 
-        contact_bodies = env_config["contact_bodies"]
+        contact_bodies = env_config.get("contact_bodies", ["R_Ankle", "L_Ankle", "R_Toe", "L_Toe"])
         self._contact_body_ids = self._build_body_ids_tensor(contact_bodies)
 
         self._full_track_bodies = self._body_names.copy()
@@ -597,7 +616,7 @@ class HumanoidPHC:
     # NOTE: HumanoidRenderEnv overrides this method to add marker actors
     def _build_single_env(self, env_id, env_ptr, humanoid_asset, dof_prop):
         # Collision settings: probably affect speed a lot
-        if self._divide_group or flags.divide_group:
+        if self._divide_group:
             col_group = self._group_ids[env_id]
         else:
             col_group = env_id  # no inter-environment collision
@@ -837,11 +856,15 @@ class HumanoidPHC:
 
         self.rew_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.float)
         # NOTE: store indiviaul reward components. 4 and 5 are hardcoded for now.
-        self.reward_raw = torch.zeros((self.num_envs, self._imitation_reward_dim + 1 if self.use_power_reward else self._imitation_reward_dim)).to(self.device)
+        self.reward_raw = torch.zeros(
+            (self.num_envs, self._imitation_reward_dim + 1 if self.use_power_reward else self._imitation_reward_dim)
+        ).to(self.device)
 
-        self.reset_buf = torch.ones(self.num_envs, device=self.device, dtype=torch.long)
-        self._terminate_buf = torch.ones(self.num_envs, device=self.device, dtype=torch.long)
-        self.progress_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
+        self.progress_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.short)
+
+        self.reset_buf = torch.ones(self.num_envs, device=self.device, dtype=torch.bool)  # This is dones
+        # _terminate_buf records early termination
+        self._terminate_buf = torch.ones(self.num_envs, device=self.device, dtype=torch.bool)
 
         self.extras = {}  # Stores info
 
@@ -1447,7 +1470,7 @@ class HumanoidPHC:
 
         # NOTE: self._full_body_reward is True by default
         if self._full_body_reward:
-            self.rew_buf[:], self.reward_raw[:, :self._imitation_reward_dim] = compute_imitation_reward(
+            self.rew_buf[:], self.reward_raw[:, : self._imitation_reward_dim] = compute_imitation_reward(
                 root_pos,
                 root_rot,
                 body_pos,
@@ -1471,7 +1494,7 @@ class HumanoidPHC:
             ref_rb_rot_subset = ref_rb_rot[..., self._track_bodies_id, :]
             ref_body_vel_subset = ref_body_vel[..., self._track_bodies_id, :]
             ref_body_ang_vel_subset = ref_body_ang_vel[..., self._track_bodies_id, :]
-            self.rew_buf[:], self.reward_raw[:, :self._imitation_reward_dim] = compute_imitation_reward(
+            self.rew_buf[:], self.reward_raw[:, : self._imitation_reward_dim] = compute_imitation_reward(
                 root_pos,
                 root_rot,
                 body_pos_subset,
@@ -1516,13 +1539,11 @@ class HumanoidPHC:
             pass_time,
             self._enable_early_termination,
             self._termination_distances[..., self._reset_bodies_id],
-            flags.no_collision_check,
             flags.im_eval,
         )
 
     def _update_hist_amp_obs(self, env_ids=None):
         if env_ids is None:
-            # CHECK ME: why do we need try/except here?
             # Got RuntimeError: unsupported operation: some elements of the input tensor and the written-to tensor refer to a single memory location. Please clone() the tensor before performing the operation.
             try:
                 self._hist_amp_obs_buf[:] = self._amp_obs_buf[:, 0 : (self._num_amp_obs_steps - 1)]
@@ -1950,10 +1971,9 @@ def compute_humanoid_im_reset(
     pass_time,
     enable_early_termination,
     termination_distance,
-    disableCollision,
     use_mean,
 ):
-    # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, bool, Tensor, bool, bool) -> Tuple[Tensor, Tensor]
+    # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, bool, Tensor, bool) -> Tuple[Tensor, Tensor]
     terminated = torch.zeros_like(reset_buf)
     if enable_early_termination:
         # NOTE: When evaluating, using mean is relaxed vs. max is strict.
@@ -1970,17 +1990,12 @@ def compute_humanoid_im_reset(
         # first timestep can sometimes still have nonzero contact forces
         # so only check after first couple of steps
         has_fallen *= progress_buf > 1
-        if disableCollision:
-            has_fallen[:] = False
+
         terminated = torch.where(has_fallen, torch.ones_like(reset_buf), terminated)
 
         # if (contact_buf.abs().sum(dim=-1)[0] > 0).sum() > 2:
         #     np.set_printoptions(precision=4, suppress=1)
         #     print(contact_buf.numpy(), contact_buf.abs().sum(dim=-1)[0].nonzero().squeeze())
-
-        # if terminated.sum() > 0:
-        #     import ipdb; ipdb.set_trace()
-        #     print("Fallen")
 
     reset = torch.where(pass_time, torch.ones_like(reset_buf), terminated)
 

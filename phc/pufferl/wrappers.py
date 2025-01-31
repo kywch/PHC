@@ -4,7 +4,6 @@ import torch
 
 
 # NOTE: some vars are kept for compatibility with the rlgames-based training code
-# TODO: clean up for pufferl
 class VecTaskWrapper:
     def __init__(self, task, rl_device, clip_observations=5.0):
         self.task = task
