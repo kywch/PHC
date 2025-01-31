@@ -498,6 +498,8 @@ class HumanoidPHC:
         self.use_power_reward = True
         self.power_coefficient = 0.0005  # cfg["env"].get("power_coefficient", 0.0005)
 
+        # NOTE: body pos reward, body rot reward, body vel reward, body ang vel reward
+        self._imitation_reward_dim = 4
         self.reward_specs = env_config.get(
             "reward_specs",
             {
@@ -785,13 +787,11 @@ class HumanoidPHC:
         dof_force_tensor = self.gym.acquire_dof_force_tensor(self.sim)
         self.dof_force_tensor = gymtorch.wrap_tensor(dof_force_tensor).view(self.num_envs, self.num_dof)
 
-        self._refresh_sim_tensors()
-
-        # NOTE: self.refresh_force_sensor_tensor() missing here?
-        # self.gym.refresh_dof_state_tensor(self.sim)
-        # self.gym.refresh_actor_root_state_tensor(self.sim)
-        # self.gym.refresh_rigid_body_state_tensor(self.sim)
-        # self.gym.refresh_net_contact_force_tensor(self.sim)
+        # NOTE: self.refresh_force_sensor_tensor() must NOT be here, as self.dof_force_tensor is used later.
+        self.gym.refresh_dof_state_tensor(self.sim)
+        self.gym.refresh_actor_root_state_tensor(self.sim)
+        self.gym.refresh_rigid_body_state_tensor(self.sim)
+        self.gym.refresh_net_contact_force_tensor(self.sim)
 
         self._root_states = gymtorch.wrap_tensor(actor_root_state)
         num_actors = self._root_states.shape[0] // self.num_envs
@@ -829,20 +829,13 @@ class HumanoidPHC:
         contact_force_tensor = gymtorch.wrap_tensor(contact_force_tensor)
         self._contact_forces = contact_force_tensor.view(self.num_envs, bodies_per_env, 3)[..., : self.num_bodies, :]
 
-    def _refresh_sim_tensors(self):
-        self.gym.refresh_dof_state_tensor(self.sim)
-        self.gym.refresh_actor_root_state_tensor(self.sim)
-        self.gym.refresh_rigid_body_state_tensor(self.sim)
-        self.gym.refresh_force_sensor_tensor(self.sim)
-        self.gym.refresh_net_contact_force_tensor(self.sim)
-
     def _setup_env_buffers(self):
         self.obs_buf = torch.zeros((self.num_envs, self.num_obs), device=self.device, dtype=torch.float)
         # self.self_obs_buf = torch.zeros((self.num_envs, self._num_self_obs), device=self.device, dtype=torch.float)
 
         self.rew_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.float)
         # NOTE: store indiviaul reward components. 4 and 5 are hardcoded for now.
-        self.reward_raw = torch.zeros((self.num_envs, 5 if self.use_power_reward else 4)).to(self.device)
+        self.reward_raw = torch.zeros((self.num_envs, self._imitation_reward_dim + 1 if self.use_power_reward else self._imitation_reward_dim)).to(self.device)
 
         self.reset_buf = torch.ones(self.num_envs, device=self.device, dtype=torch.long)
         self._terminate_buf = torch.ones(self.num_envs, device=self.device, dtype=torch.long)
@@ -1041,6 +1034,13 @@ class HumanoidPHC:
         self.reset_buf[env_ids] = 0
         self._terminate_buf[env_ids] = 0
         self._contact_forces[env_ids] = 0
+
+    def _refresh_sim_tensors(self):
+        self.gym.refresh_dof_state_tensor(self.sim)
+        self.gym.refresh_actor_root_state_tensor(self.sim)
+        self.gym.refresh_rigid_body_state_tensor(self.sim)
+        self.gym.refresh_force_sensor_tensor(self.sim)
+        self.gym.refresh_net_contact_force_tensor(self.sim)
 
     def _init_amp_obs(self, env_ids):
         self._compute_amp_observations(env_ids)
@@ -1443,7 +1443,7 @@ class HumanoidPHC:
 
         # NOTE: self._full_body_reward is True by default
         if self._full_body_reward:
-            self.rew_buf[:], self.reward_raw = compute_imitation_reward(
+            self.rew_buf[:], self.reward_raw[:, :self._imitation_reward_dim] = compute_imitation_reward(
                 root_pos,
                 root_rot,
                 body_pos,
@@ -1467,7 +1467,7 @@ class HumanoidPHC:
             ref_rb_rot_subset = ref_rb_rot[..., self._track_bodies_id, :]
             ref_body_vel_subset = ref_body_vel[..., self._track_bodies_id, :]
             ref_body_ang_vel_subset = ref_body_ang_vel[..., self._track_bodies_id, :]
-            self.rew_buf[:], self.reward_raw = compute_imitation_reward(
+            self.rew_buf[:], self.reward_raw[:, :self._imitation_reward_dim] = compute_imitation_reward(
                 root_pos,
                 root_rot,
                 body_pos_subset,
@@ -1489,7 +1489,7 @@ class HumanoidPHC:
             power_reward[self.progress_buf <= 3] = 0
 
             self.rew_buf[:] += power_reward
-            self.reward_raw = torch.cat([self.reward_raw, power_reward[:, None]], dim=-1)
+            self.reward_raw[:, -1] = power_reward
 
     def _compute_reset(self):
         time = (
