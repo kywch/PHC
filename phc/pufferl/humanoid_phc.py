@@ -787,11 +787,13 @@ class HumanoidPHC:
         dof_force_tensor = self.gym.acquire_dof_force_tensor(self.sim)
         self.dof_force_tensor = gymtorch.wrap_tensor(dof_force_tensor).view(self.num_envs, self.num_dof)
 
-        # NOTE: self.refresh_force_sensor_tensor() must NOT be here, as self.dof_force_tensor is used later.
-        self.gym.refresh_dof_state_tensor(self.sim)
-        self.gym.refresh_actor_root_state_tensor(self.sim)
-        self.gym.refresh_rigid_body_state_tensor(self.sim)
-        self.gym.refresh_net_contact_force_tensor(self.sim)
+        self._refresh_sim_tensors()
+
+        # NOTE: refresh_force_sensor_tensor, refresh_dof_force_tensor were not here. Any change in learning?
+        # self.gym.refresh_dof_state_tensor(self.sim)
+        # self.gym.refresh_actor_root_state_tensor(self.sim)
+        # self.gym.refresh_rigid_body_state_tensor(self.sim)
+        # self.gym.refresh_net_contact_force_tensor(self.sim)
 
         self._root_states = gymtorch.wrap_tensor(actor_root_state)
         num_actors = self._root_states.shape[0] // self.num_envs
@@ -1039,7 +1041,9 @@ class HumanoidPHC:
         self.gym.refresh_dof_state_tensor(self.sim)
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_rigid_body_state_tensor(self.sim)
+
         self.gym.refresh_force_sensor_tensor(self.sim)
+        self.gym.refresh_dof_force_tensor(self.sim)
         self.gym.refresh_net_contact_force_tensor(self.sim)
 
     def _init_amp_obs(self, env_ids):

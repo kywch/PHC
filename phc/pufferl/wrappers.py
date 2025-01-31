@@ -17,9 +17,22 @@ class VecTaskWrapper:
         self.num_states = task.num_states
         self.num_actions = task.num_actions
 
-        self.obs_space = self.task.single_observation_space
-        self._amp_obs_space = self.task.amp_observation_space
-        self.act_space = self.task.single_action_space
+        if hasattr(self.task, "single_observation_space"):
+            self.obs_space = self.task.single_observation_space
+        else:
+            self.obs_space = spaces.Box(np.ones(self.num_obs) * -np.Inf, np.ones(self.num_obs) * np.Inf)
+
+        if hasattr(self.task, "amp_observation_space"):
+            self._amp_obs_space = self.task.amp_observation_space
+        else:
+            num_amp_obs = self.task.get_num_amp_obs()
+            self._amp_obs_space = spaces.Box(np.ones(num_amp_obs) * -np.Inf, np.ones(num_amp_obs) * np.Inf)
+
+        if hasattr(self.task, "single_action_space"):
+            self.act_space = self.task.single_action_space
+        else:
+            self.act_space = spaces.Box(np.ones(self.num_actions) * -1.0, np.ones(self.num_actions) * 1.0)
+
         self.state_space = spaces.Box(np.ones(self.num_states) * -np.Inf, np.ones(self.num_states) * np.Inf)
 
     def get_number_of_agents(self):
@@ -54,10 +67,21 @@ class VecTaskWrapper:
 
     def reset(self, env_ids=None):
         obs = self.task.reset(env_ids)
+
+        if obs is None:
+            obs = self.task.obs_buf
+
         return self._clip_obs(obs)
 
     def step(self, actions):
         obs, rew, done, info = self.task.step(actions)
+
+        if obs is None:
+            obs = self.task.obs_buf
+            rew = self.task.rew_buf.to(self.rl_device)
+            done = self.task.reset_buf.to(self.rl_device)
+            info = self.task.extras
+
         return self._clip_obs(obs), rew, done, info
 
     def fetch_amp_obs_demo(self, num_samples):
