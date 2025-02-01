@@ -1,5 +1,6 @@
 import os
 import ast
+import signal
 import argparse
 import configparser
 
@@ -9,6 +10,10 @@ import pufferlib.vector
 from phc.pufferl.demo.environment import make_env
 from phc.pufferl.demo.policy import CleanRLPolicy
 from phc.pufferl.demo import clean_pufferl
+
+# Aggressively exit on ctrl+c
+signal.signal(signal.SIGINT, lambda sig, frame: os._exit(0))
+
 
 if __name__ == "__main__":
     p = configparser.ConfigParser()
