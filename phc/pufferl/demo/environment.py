@@ -1,5 +1,6 @@
 # Env binding for pufferlib
 import time
+import argparse
 
 from phc.pufferl.humanoid_phc import HumanoidPHC
 
@@ -11,22 +12,6 @@ import pufferlib
 
 def make_env(**kwargs):
     return PHCPufferEnv(**kwargs)
-
-
-def test_perf(env, timeout=10):
-    steps = 0
-    start = time.time()
-    env.reset()
-    actions = env.action_space.sample()
-
-    print("Starting perf test...")
-    while time.time() - start < timeout:
-        env.step(actions)
-        steps += env.num_agents
-
-    end = time.time()
-    sps = int(steps / (end - start))
-    print(f"Steps: {steps}, SPS: {sps}")
 
 
 class PHCPufferEnv(pufferlib.PufferEnv):
@@ -106,12 +91,33 @@ class PHCPufferEnv(pufferlib.PufferEnv):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-n", "--num_envs", type=int, default=32)
+    parser.add_argument("-m", "--motion_file", type=str, default="sample_data/amass_train_take6_upright.pkl")
+    parser.add_argument("--disable_self_collision", action="store_true")
+    args = parser.parse_args()
+
+    def test_perf(env, timeout=10):
+        steps = 0
+        start = time.time()
+        env.reset()
+        actions = env.action_space.sample()
+
+        print("Starting perf test...")
+        while time.time() - start < timeout:
+            env.step(actions)
+            steps += env.num_agents
+
+        end = time.time()
+        sps = int(steps / (end - start))
+        print(f"Steps: {steps}, SPS: {sps}")
+
     cfg = {
         "env": {
-            "num_envs": 32,
-            "motion_file": "sample_data/amass_train_take6_upright.pkl",
+            "num_envs": args.num_envs,
+            "motion_file": args.motion_file,
         },
-        "robot": {"has_self_collision": False},
+        "robot": {"has_self_collision": not args.disable_self_collision},
     }
 
     env = PHCPufferEnv(cfg)

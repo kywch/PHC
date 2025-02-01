@@ -7,11 +7,12 @@ name = "phc"
 requires-python = ">=3.8,<3.9"
 version = "0.1.0"
 dependencies = [
-    "gym==0.23.1",
+    "gym==0.23",
     "smplx@git+https://github.com/ZhengyiLuo/smplx.git",
     "smpl_sim@git+https://github.com/kywch/SMPLSim.git",
     "open3d>=0.18.0,<0.19",
     "chumpy@git+https://github.com/nico-von-huene/chumpy",  # fixed pip install error
+    "pufferlib@git+https://github.com/kywch/PufferLib",
 ]
 
 [tool.setuptools]
@@ -49,6 +50,9 @@ termcolor = ">=2.4.0,<3"
 joblib = ">=1.4.2,<2"
 aiohttp = ">=3.10.5,<4"
 scikit-image = ">=0.21.0,<0.22"
+
+# for rl-games
+tensorboardx = ">=2.6.2.2,<3"
 
 [tool.pixi.pypi-dependencies]
 phc = { path = ".", editable = true }
@@ -95,11 +99,11 @@ exclude = [
 ]
 
 # Same as Black.
-line-length = 100
+line-length = 120
 indent-width = 4
 
-# Assume Python 3.11
-target-version = "py311"
+# Assume Python 3.8
+target-version = "py38"
 
 [tool.ruff.lint]
 # Enable Pyflakes (`F`) and a subset of the pycodestyle (`E`)  codes by default.
