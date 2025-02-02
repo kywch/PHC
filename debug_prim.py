@@ -6,33 +6,28 @@ import random
 import hydra
 from omegaconf import DictConfig, OmegaConf
 from easydict import EasyDict
-
-from isaacgym import gymapi
-from isaacgym import gymutil
+import isaacgym
 
 import numpy as np
 import torch
 
-from rl_games.common import env_configurations
+from rl_games.common import env_configurations, vecenv
 
 from phc import flags
 from phc.utils.config import set_np_formatting, set_seed
 
-from phc.run_hydra import build_alg_runner, RLGPUAlgoObserver, parse_sim_params
-
-from phc.pufferl.humanoid_phc import HumanoidPHC
-from phc.pufferl.render_env import HumanoidRenderEnv
-
 # RLG
-# from phc.learning.amp_network_builder import AMPBuilder as RLG_AMPBuilder
-# from phc.learning.amp_models import ModelAMPContinuous as RLG_ModelAMPContinuous
 import phc.learning.im_amp_players as rlg_players
 import phc.learning.im_amp as rlg_agent
 
 # NO RLG
+from phc.norlg_learning.env import create_rlgpu_env
 from phc.norlg_learning.utils import DefaultRewardsShaper, DefaultAlgoObserver
 from phc.norlg_learning.network import AMPBuilder, ModelAMPContinuous
-from phc.norlg_learning.env import VecTaskWrapper
+
+# TODO: Remove this
+from phc.run_hydra import RLGPUEnv
+vecenv.register('RLGPU', lambda config_name, num_actors, **kwargs: RLGPUEnv(config_name, num_actors, **kwargs))
 
 RUN_RLG = False
 RUN_EVAL = False
@@ -167,45 +162,6 @@ class Runner:
         #     agent.train()
 
 
-def create_rlgpu_env(cfg, cfg_train, **kwargs):
-    sim_params = parse_sim_params(cfg)
-    args = EasyDict(
-        {
-            "task": cfg.env.task,
-            "device_id": cfg.device_id,
-            "rl_device": cfg.rl_device,
-            "physics_engine": gymapi.SIM_PHYSX if not cfg.sim.use_flex else gymapi.SIM_FLEX,
-            "headless": cfg.headless,
-            "device": cfg.device,
-        }
-    )  #### ZL: patch
-
-    # task, env = parse_task(args, cfg, cfg_train, sim_params)
-    # assert args.task == "HumanoidIm", "Porting HumanoidIm (PHC) only"
-
-    task_cls = HumanoidPHC
-    if cfg.test and not cfg.headless:
-        task_cls = HumanoidRenderEnv
-
-    task = task_cls(
-        cfg=cfg,
-        sim_params=sim_params,
-        physics_engine=args.physics_engine,
-        device_type=args.device,
-        device_id=args.device_id,
-        headless=args.headless,
-    )
-
-    env = VecTaskWrapper(task, cfg.rl_device, cfg_train.get("clip_observations", np.inf))
-
-    print(env.num_environments)
-    print(env.num_actions)
-    print(env.num_observations)
-    print(env.num_states)
-
-    return env
-
-
 @hydra.main(
     version_base=None,
     config_path="phc/data/cfg",
@@ -219,7 +175,6 @@ def main(cfg_hydra: DictConfig) -> None:
 
     set_np_formatting()
 
-    # cfg, cfg_train, logdir = load_cfg(args)
     (
         flags.debug,
         flags.follow,
@@ -282,7 +237,7 @@ def main(cfg_hydra: DictConfig) -> None:
 
     os.makedirs(cfg.output_path, exist_ok=True)
 
-    env_creator = lambda **kwargs: create_rlgpu_env(cfg, cfg_train, **kwargs)
+    env_creator = lambda **kwargs: create_rlgpu_env(cfg, **kwargs)
     env_configurations.register("rlgpu", {"env_creator": env_creator, "vecenv_type": "RLGPU"})
 
     if WANDB_TRACK and not RUN_EVAL and not cfg.test:

@@ -1,14 +1,41 @@
+from isaacgym import gymapi
+
 from gym import spaces
 import numpy as np
 import torch
 
+from phc.pufferl.humanoid_phc import HumanoidPHC
+from phc.pufferl.render_env import HumanoidRenderEnv
+
+
+def create_rlgpu_env(cfg, **kwargs):
+    task_cls = HumanoidPHC
+    if cfg.test and not cfg.headless:
+        task_cls = HumanoidRenderEnv
+
+    task = task_cls(
+        cfg=cfg,
+        sim_params=None,
+        physics_engine=gymapi.SIM_PHYSX,
+        device_type=cfg.device,
+        device_id=cfg.device_id,
+        headless=cfg.headless,
+    )
+
+    env = VecTaskWrapper(task)
+
+    print(env.num_environments)
+    print(env.num_actions)
+    print(env.num_observations)
+    print(env.num_states)
+
+    return env
+
 
 # This wrapper combines VecTask, VecTaskPython, VecTaskPythonWrapper, RLGPUEnvWrapper
-# Also does the action clipping
 class VecTaskWrapper:
-    def __init__(self, task, rl_device, clip_observations=5.0):
+    def __init__(self, task, clip_observations=None):
         self.task = task
-        self.rl_device = rl_device
         self.clip_obs = clip_observations
 
         self.num_environments = task.num_envs
@@ -76,7 +103,10 @@ class VecTaskWrapper:
     #     return self.num_observations
 
     def _clip_obs(self, buffer):
-        return torch.clamp(buffer, -self.clip_obs, self.clip_obs).to(self.rl_device)
+        if self.clip_obs is None:
+            return buffer
+
+        return torch.clamp(buffer, -self.clip_obs, self.clip_obs)
 
     def reset(self, env_ids=None):
         obs = self.task.reset(env_ids)
@@ -95,8 +125,8 @@ class VecTaskWrapper:
 
         if obs is None:
             obs = self.task.obs_buf
-            rewards = self.task.rew_buf.to(self.rl_device)
-            dones = self.task.reset_buf.to(self.rl_device)
+            rewards = self.task.rew_buf
+            dones = self.task.reset_buf
             infos = self.task.extras
         obs = self._clip_obs(obs)
 

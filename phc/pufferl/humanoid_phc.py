@@ -40,6 +40,7 @@ class StateInit(Enum):
 class IsaacGymBase:
     def __init__(
         self,
+        sim_params,  # NOTE: This is ignored for now
         physics_engine,
         device_type,
         device_id,  # Allow multi-gpu setting
@@ -153,7 +154,7 @@ class HumanoidPHC:
         headless=True,
     ):
         # NOTE: Calling without sim_params should work fine for now
-        self.isaac_base = IsaacGymBase(physics_engine, device_type, device_id, headless)
+        self.isaac_base = IsaacGymBase(sim_params, physics_engine, device_type, device_id, headless)
 
         self.device = self.isaac_base.device
         self.gym = self.isaac_base.gym

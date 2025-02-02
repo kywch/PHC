@@ -4,7 +4,6 @@ import os.path as osp
 import hydra
 from omegaconf import DictConfig, OmegaConf
 from easydict import EasyDict
-
 import isaacgym
 
 from rl_games.common import env_configurations
@@ -12,7 +11,8 @@ from rl_games.common import env_configurations
 from phc import flags
 from phc.utils.config import set_np_formatting, set_seed
 
-from debug_prim import Runner, create_rlgpu_env
+from phc.norlg_learning.env import create_rlgpu_env
+from debug_prim import Runner
 
 @hydra.main(
     version_base=None,
@@ -59,7 +59,7 @@ def main(cfg_hydra: DictConfig) -> None:
 
     os.makedirs(cfg.output_path, exist_ok=True)
 
-    env_creator = lambda **kwargs: create_rlgpu_env(cfg, cfg_train, **kwargs)
+    env_creator = lambda **kwargs: create_rlgpu_env(cfg, **kwargs)
     env_configurations.register("rlgpu", {"env_creator": env_creator, "vecenv_type": "RLGPU"})
 
     if not cfg.test:

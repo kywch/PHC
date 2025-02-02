@@ -2,8 +2,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-DISC_LOGIT_INIT_SCALE = 1.0
-
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     """CleanRL's default layer initialization"""
@@ -37,11 +35,8 @@ class AMPBuilder:
 
             super().__init__()
 
-            # Remove these
-            # self.actor_cnn = nn.Sequential()
-            # self.critic_cnn = nn.Sequential()
-
             # Hardcoding MLPs for readability
+            # NOTE: How the networs get init is differnt from the original implementation
             actor_input_dim = input_shape[0]
             hidden_output_dim = self.units[-1]
             assert hidden_output_dim == self._disc_units[-1]
@@ -102,7 +97,9 @@ class AMPBuilder:
                 layer_init(nn.Linear(1024, hidden_output_dim)),
                 nn.ReLU(),
             )
-            self._disc_logits = layer_init(torch.nn.Linear(hidden_output_dim, 1), std=DISC_LOGIT_INIT_SCALE)
+
+            # self._disc_logits = layer_init(torch.nn.Linear(hidden_output_dim, 1), std=DISC_LOGIT_INIT_SCALE)
+            self._disc_logits = layer_init(torch.nn.Linear(hidden_output_dim, 1))
 
         def forward(self, obs_dict):
             # CHECK ME: obs_dict or obs_dict["obs"] ???
