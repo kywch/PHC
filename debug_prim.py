@@ -24,13 +24,14 @@ import phc.learning.im_amp as rlg_agent
 from phc.norlg_learning.env import create_rlgpu_env
 from phc.norlg_learning.utils import DefaultRewardsShaper, DefaultAlgoObserver
 from phc.norlg_learning.network import AMPBuilder, ModelAMPContinuous
+from phc.norlg_learning.phc_players import PHCPlayer
 
 # TODO: Remove this
 from phc.run_hydra import RLGPUEnv
 vecenv.register('RLGPU', lambda config_name, num_actors, **kwargs: RLGPUEnv(config_name, num_actors, **kwargs))
 
 RUN_RLG = False
-RUN_EVAL = False
+RUN_EVAL = True
 WANDB_TRACK = False
 
 
@@ -111,11 +112,10 @@ class Runner:
             raise ValueError(f"Unknown command: {args}")
 
     def create_player(self):
-        return rlg_players.IMAMPPlayerContinuous(self.config)
-        # if RUN_RLG:
-        #     return rlg_ase_players.ASEPlayer(self.config)
-        # else:
-        #     return ASEPlayer(self.config, self.env_creator)
+        if RUN_RLG:
+            return rlg_players.IMAMPPlayerContinuous(self.config)
+        else:
+            return PHCPlayer(self.config, self.env_creator)
 
     def run_train(self):
         print("Started to train")

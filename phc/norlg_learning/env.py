@@ -45,24 +45,24 @@ class VecTaskWrapper:
         self.num_actions = task.num_actions
 
         if hasattr(self.task, "single_observation_space"):
-            self.obs_space = self.task.single_observation_space
+            self.observation_space = self.task.single_observation_space
         else:
-            self.obs_space = spaces.Box(
+            self.observation_space = spaces.Box(
                 np.ones(self.num_obs) * -np.Inf, np.ones(self.num_obs) * np.Inf, dtype=np.float32
             )
 
         if hasattr(self.task, "amp_observation_space"):
-            self._amp_obs_space = self.task.amp_observation_space
+            self.amp_observation_space = self.task.amp_observation_space
         else:
             num_amp_obs = self.task.get_num_amp_obs()
-            self._amp_obs_space = spaces.Box(
+            self.amp_observation_space = spaces.Box(
                 np.ones(num_amp_obs) * -np.Inf, np.ones(num_amp_obs) * np.Inf, dtype=np.float32
             )
 
         if hasattr(self.task, "single_action_space"):
-            self.act_space = self.task.single_action_space
+            self.action_space = self.task.single_action_space
         else:
-            self.act_space = spaces.Box(
+            self.action_space = spaces.Box(
                 np.ones(self.num_actions) * -1.0, np.ones(self.num_actions) * 1.0, dtype=np.float32
             )
 
@@ -79,28 +79,8 @@ class VecTaskWrapper:
         return self.num_agents
 
     @property
-    def observation_space(self):
-        return self.obs_space
-
-    @property
-    def amp_observation_space(self):
-        return self._amp_obs_space
-
-    @property
-    def action_space(self):
-        return self.act_space
-
-    # @property
-    # def num_envs(self):
-    #     return self.num_environments
-
-    # @property
-    # def num_acts(self):
-    #     return self.num_actions
-
-    # @property
-    # def num_obs(self):
-    #     return self.num_observations
+    def device(self):
+        return self.task.device
 
     def _clip_obs(self, buffer):
         if self.clip_obs is None:
