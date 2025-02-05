@@ -506,8 +506,8 @@ class HumanoidPHC:
         self._amp_root_height_obs = True
 
         # NOTE: Used in amp_agent (rl-games), used to resample motions for training.
-        # TODO: Name is misleading. Rename this to motion_resampling_interval
-        self.shape_resampling_interval = 500
+        # TODO: Remove shape_resampling_interval (this is for rl-games)
+        self.motion_resampling_interval = self.shape_resampling_interval = 500
 
         # NOTE: Auto PMCP updates the motion sampling prob during training
         # See IMAmpAgent.update_training_data() in the eval function

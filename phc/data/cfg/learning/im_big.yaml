@@ -1,5 +1,5 @@
 params:
-  seed: 0
+  seed: 1
 
   algo:
     name: im_amp

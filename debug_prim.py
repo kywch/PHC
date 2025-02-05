@@ -24,14 +24,14 @@ import phc.learning.im_amp as rlg_agent
 from phc.norlg_learning.env import create_rlgpu_env
 from phc.norlg_learning.utils import DefaultRewardsShaper, DefaultAlgoObserver
 from phc.norlg_learning.network import AMPBuilder, ModelAMPContinuous
-from phc.norlg_learning.phc_players import PHCPlayer
+from phc.norlg_learning.phc_agent import PHCAgent
 
 # TODO: Remove this
 from phc.run_hydra import RLGPUEnv
 vecenv.register('RLGPU', lambda config_name, num_actors, **kwargs: RLGPUEnv(config_name, num_actors, **kwargs))
 
 RUN_RLG = False
-RUN_EVAL = True
+RUN_EVAL = False
 WANDB_TRACK = False
 
 
@@ -65,13 +65,13 @@ class Runner:
             torch.cuda.manual_seed(self.seed)
             torch.cuda.manual_seed_all(self.seed)
 
-            # if USE_CPU:
-            #     # refer to https://docs.nvidia.com/cuda/cublas/index.html#cublasApi_reproducibility
-            #     os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
-            #     torch.backends.cudnn.benchmark = False
-            #     torch.backends.cudnn.deterministic = True
-            #     torch.use_deterministic_algorithms(True)  # raises runtime error if not deterministic
-            #     # torch.set_deterministic_debug_mode("warn")  # prints out warnings if not deterministic
+            if params["config"]["device"] == "cpu":
+                # refer to https://docs.nvidia.com/cuda/cublas/index.html#cublasApi_reproducibility
+                os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+                torch.backends.cudnn.benchmark = False
+                torch.backends.cudnn.deterministic = True
+                torch.use_deterministic_algorithms(True)  # raises runtime error if not deterministic
+                # torch.set_deterministic_debug_mode("warn")  # prints out warnings if not deterministic
 
         if self.load_check_point:
             print("Found checkpoint")
@@ -106,7 +106,7 @@ class Runner:
             player = self.create_player()
             if self.load_path != "Base":
                 player.restore(self.load_path)
-            player.run()
+            player.play()
 
         else:
             raise ValueError(f"Unknown command: {args}")
@@ -115,24 +115,23 @@ class Runner:
         if RUN_RLG:
             return rlg_players.IMAMPPlayerContinuous(self.config)
         else:
-            return PHCPlayer(self.config, self.env_creator)
+            return PHCAgent(self.config, self.env_creator)
 
     def run_train(self):
-        print("Started to train")
-        self.load_config(self.default_config)
-
         if self.algo_observer is None:
             self.algo_observer = DefaultAlgoObserver()
         self.config["algo_observer"] = self.algo_observer
 
-        # if RUN_RLG:
-        self.config["features"] = {"observer": self.algo_observer}
-        agent = rlg_agent.IMAmpAgent(base_name="run", config=self.config)
+        if RUN_RLG:
+            self.config["features"] = {"observer": self.algo_observer}
+            agent = rlg_agent.IMAmpAgent(base_name="run", config=self.config)
 
-        # else:
-        #     vec_env = self.env_creator()
-        #     vec_env = RLGPUEnvWrapper(vec_env)
-        #     agent = ASEAgent(self.config, vec_env)
+        else:
+            agent = PHCAgent(self.config, self.env_creator)
+            agent.config_train()
+            # vec_env = self.env_creator()
+            # vec_env = RLGPUEnvWrapper(vec_env)
+            # agent = ASEAgent(self.config, vec_env)
 
         if self.load_check_point and (self.load_path is not None):
             agent.restore(self.load_path)
@@ -217,6 +216,7 @@ def main(cfg_hydra: DictConfig) -> None:
 
     # Create default directories for weights and statistics
     cfg_train = cfg.learning
+    cfg_train["params"]["config"]["device"] = cfg.device
     cfg_train["params"]["config"]["network_path"] = cfg.output_path
     cfg_train["params"]["config"]["train_dir"] = cfg.output_path
     cfg_train["params"]["config"]["num_actors"] = cfg.env.num_envs
@@ -269,6 +269,7 @@ TRAIN_SINGLE_PRIM = [
     "learning.params.config.minibatch_size=1024",
     "learning.params.config.amp_minibatch_size=1024",
     # "learning.params.config.save_frequency=3",
+    "device=cpu",
 ]
 
 EVALUATE_SINGLE_PRIM = [
