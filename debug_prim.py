@@ -10,6 +10,7 @@ import isaacgym
 
 import numpy as np
 import torch
+from torch import optim
 
 from rl_games.common import env_configurations, vecenv
 
@@ -64,9 +65,13 @@ def rebuild_model(agent, device):
         "amp_input_shape": amp_shape,
     }
 
+    # Build model
     agent.model = agent.network.build(config)
     agent.model.to(device)
     agent.model.eval()
+
+    # Update the optimizer
+    agent.optimizer = optim.Adam(agent.model.parameters(), float(agent.last_lr), eps=1e-08, weight_decay=0.0)
 
 # Replace rlgames' torch_runner and factories
 class Runner:
