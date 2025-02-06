@@ -6,7 +6,6 @@ from omegaconf import DictConfig, OmegaConf
 from easydict import EasyDict
 
 from isaacgym import gymapi
-from isaacgym import gymutil
 
 import numpy as np
 
@@ -15,7 +14,7 @@ from rl_games.common import env_configurations
 from phc.utils.config import set_np_formatting, set_seed
 
 from phc.run_hydra import build_alg_runner, RLGPUAlgoObserver, parse_sim_params
-from phc.pufferl.wrappers import VecTaskWrapper
+from phc.norlg_learning.env import VecTaskWrapper
 
 from phc.env.tasks.humanoid_im import HumanoidIm as OrgHumanoidIm  # original
 from phc.pufferl.humanoid_phc import HumanoidPHC
