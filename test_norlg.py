@@ -75,7 +75,9 @@ def main(cfg_hydra: DictConfig) -> None:
             wandb.run.name = cfg.exp_name
             wandb.run.save()
 
-    runner = Runner(env_creator)
+    run_rlg = cfg.get("run_rlg", False)
+
+    runner = Runner(env_creator, run_rlg)
     runner.load(cfg_train)
     runner.run(cfg)
 
@@ -94,7 +96,9 @@ TRAIN_SINGLE_PRIM = [
 
 if __name__ == '__main__':
     import sys
-    if len(sys.argv) == 1:
+    if len(sys.argv) < 3:
         sys.argv.extend(TRAIN_SINGLE_PRIM)
+    else:
+        raise ValueError("Too many arguments")
 
     main()
