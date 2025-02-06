@@ -1610,7 +1610,7 @@ class HumanoidPHC:
                 gender_betas=self.humanoid_shapes.cpu(),
                 random_sample=(not flags.test) and (not self.seq_motions),
                 max_len=-1 if flags.test else self.max_episode_length,
-            )  # For now, only need to sample motions since there are only 400 hmanoids
+            )
 
             time = self.progress_buf * self.dt + self._motion_start_times + self._motion_start_times_offset
             root_res = self._motion_lib.get_root_pos_smpl(self._sampled_motion_ids, time)

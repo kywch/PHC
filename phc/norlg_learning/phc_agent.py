@@ -6,6 +6,7 @@ from datetime import datetime
 
 import numpy as np
 import torch
+from torch import nn
 from torch import optim
 
 import wandb
@@ -26,6 +27,7 @@ def swap_and_flatten01(arr):
         return arr
     s = arr.size()
     return arr.transpose(0, 1).reshape(s[0] * s[1], *s[2:])
+
 
 def policy_kl(p0_mu, p0_sigma, p1_mu, p1_sigma, reduce=True):
     c1 = torch.log(p1_sigma / p0_sigma + 1e-5)
@@ -163,11 +165,13 @@ class PHCAgent:
         return obs_torch
 
     def _preproc_obs(self, obs_batch, use_temp=False):
+        # NOTE: PHC uses the frozen running mean/std during training.
+        # TODO: Compare if use_temp is needed.
         if self.normalize_input:
+            obs_batch = self.running_mean_std(obs_batch)
             if use_temp:
+                # Return the norm obs using the frozen running mean/std
                 obs_batch = self.running_mean_std_temp(obs_batch)
-            else:
-                obs_batch = self.running_mean_std(obs_batch)
         return obs_batch
 
     #####################################################################
@@ -187,7 +191,7 @@ class PHCAgent:
 
         cr = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         steps = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
-        done_indices = None
+        done_indices = []
 
         for _ in range(self.max_steps):
             obs_torch = self.env_reset(done_indices)
@@ -279,9 +283,12 @@ class PHCAgent:
         self.clip_value = self.config["clip_value"]  # CHECK ME: this is False
         self.horizon_length = self.config["horizon_length"]  # 32
         self.normalize_advantage = self.config["normalize_advantage"]  # True
-        self.grad_norm = self.config["grad_norm"]  # 50
         self.gamma = self.config["gamma"]  # 0.99
         self.tau = self.config["tau"]  # 0.95
+
+        # PHC uses gradient clipping
+        self.truncate_grads = True  # self.config.get('truncate_grads', False)
+        self.grad_norm = self.config["grad_norm"]  # 50
 
         # Loss weights
         self.critic_coef = self.config.get("critic_coef", 5.0)
@@ -315,15 +322,9 @@ class PHCAgent:
         self.epoch_num = 0
         self.curr_frames = 0
 
-        self.optimizer = optim.Adam(
-            self.model.parameters(), self.last_lr, eps=1e-08, weight_decay=0.0
-        )
+        self.optimizer = optim.Adam(self.model.parameters(), self.last_lr, eps=1e-08, weight_decay=0.0)
 
         self.dataset = AMPDataset(self.batch_size, self.minibatch_size, self.horizon_length)
-
-        # Scaler does not do anything. Remove?
-        self.mixed_precision = False
-        self.scaler = torch.cuda.amp.GradScaler(enabled=self.mixed_precision)
 
         self.games_to_track = self.config.get("games_to_track", 100)
         self.game_rewards = AverageMeter(self.value_size, self.games_to_track).to(self.device)
@@ -354,6 +355,9 @@ class PHCAgent:
         total_time = 0
         self.frame = 0
 
+        # NOTE: Set the early termination condition to 0.25 (the original value)
+        self.task_env._termination_distances[:] = 0.25
+
         self.obs = self.env_reset()
         self.curr_frames = self.batch_size_envs
 
@@ -364,10 +368,12 @@ class PHCAgent:
         num_batches = int(np.ceil(buffer_size / self._amp_batch_size))
         for _ in range(num_batches):
             demos = self.task_env.fetch_amp_obs_demo(self._amp_batch_size)
-            self._amp_obs_demo_buffer.store({'amp_obs': demos})
+            self._amp_obs_demo_buffer.store({"amp_obs": demos})
 
         # MATCH xcxc debug -- init (norlg)
         # print("obs", self.obs.sum())
+        # print("amb obs", self._amp_obs_demo_buffer._data_buf["amp_obs"].sum())
+        # print("amp dataset idx", self.dataset._idx_buf[0])
 
         while True:
             self.epoch_num += 1
@@ -389,7 +395,7 @@ class PHCAgent:
 
             # Add amp obs
             demos = self.task_env.fetch_amp_obs_demo(self._amp_batch_size)
-            self._amp_obs_demo_buffer.store({'amp_obs': demos})
+            self._amp_obs_demo_buffer.store({"amp_obs": demos})
 
             num_obs_samples = batch_dict["amp_obs"].shape[0]
             amp_obs_demo = self._amp_obs_demo_buffer.sample(num_obs_samples)["amp_obs"]
@@ -401,8 +407,9 @@ class PHCAgent:
                 amp_obs_replay = self._amp_replay_buffer.sample(num_obs_samples)["amp_obs"]
             batch_dict["amp_obs_replay"] = amp_obs_replay
 
-            # xcxc debug -- amp obs buffers (norlg)
+            # MATCH xcxc debug -- amp obs buffers (norlg)
             # print()
+            # print("returns", batch_dict["returns"].sum())
             # print("amp_obs_demo", amp_obs_demo.sum())
             # print("amp_obs_replay", amp_obs_replay.sum())
             # print()
@@ -461,9 +468,9 @@ class PHCAgent:
             train_info["play_time"] = scaled_play_time
             train_info["update_time"] = time.time() - update_time_start
             train_info["disc_rewards"] = batch_dict["disc_rewards"]
-            train_info['reward_raw'] = batch_dict['reward_raw']
-            train_info['mb_rewards'] = batch_dict['mb_rewards']
-            train_info['returns'] = batch_dict['returns']
+            train_info["reward_raw"] = batch_dict["reward_raw"]
+            train_info["mb_rewards"] = batch_dict["mb_rewards"]
+            train_info["returns"] = batch_dict["returns"]
 
             # self._store_replay_amp_obs(batch_dict["amp_obs"])
             amp_obs = batch_dict["amp_obs"]
@@ -490,7 +497,7 @@ class PHCAgent:
             # self.running_mean_std_temp.freeze()
 
             # MATCH xcxc debug -- train epoch (norlg)
-            # for k in ["disc_loss", "disc_agent_logit", "disc_rewards"]:
+            # for k in ["kl", "entropy", "actor_loss", "critic_loss", "b_loss", "disc_loss", "disc_agent_logit", "disc_rewards"]:
             #     if isinstance(train_info[k], list):
             #         print(k, torch.stack(train_info[k]).sum())
             #     else:
@@ -518,56 +525,58 @@ class PHCAgent:
             train_info_dict = {
                 "performance/total_fps": curr_frames / scaled_time,
                 "performance/step_fps": curr_frames / scaled_play_time,
-                "performance/update_time": train_info['update_time'],
-                "performance/play_time": train_info['play_time'],
-                "learning_rate/last_lr": train_info['last_lr'][-1] * train_info['lr_mul'][-1],
-                "learning_rate/lr_mul": train_info['lr_mul'][-1],
-                "learning_rate/e_clip": self.e_clip * train_info['lr_mul'][-1],
+                "performance/update_time": train_info["update_time"],
+                "performance/play_time": train_info["play_time"],
+                "learning_rate/last_lr": train_info["last_lr"][-1] * train_info["lr_mul"][-1],
+                "learning_rate/lr_mul": train_info["lr_mul"][-1],
+                "learning_rate/e_clip": self.e_clip * train_info["lr_mul"][-1],
             }
-            
+
             if "actor_loss" in train_info:
                 train_info_dict.update(
                     {
-                        "loss/actor_loss": mean_list(train_info['actor_loss']).item(),
-                        "loss/critic_loss": mean_list(train_info['critic_loss']).item(),
-                        "loss/bounds_loss": mean_list(train_info['b_loss']).item(),
-                        "loss/entropy": mean_list(train_info['entropy']).item(),
-                        "loss/clip_frac": mean_list(train_info['actor_clip_frac']).item(),
-                        "loss/kl": mean_list(train_info['kl']).item(),
+                        "loss/actor_loss": mean_list(train_info["actor_loss"]).item(),
+                        "loss/critic_loss": mean_list(train_info["critic_loss"]).item(),
+                        "loss/bounds_loss": mean_list(train_info["b_loss"]).item(),
+                        "loss/entropy": mean_list(train_info["entropy"]).item(),
+                        "loss/clip_frac": mean_list(train_info["actor_clip_frac"]).item(),
+                        "loss/kl": mean_list(train_info["kl"]).item(),
                     }
                 )
 
             if "disc_loss" in train_info:
-                disc_reward_std, disc_reward_mean = torch.std_mean(train_info['disc_rewards'])
-                train_info_dict.update({
-                    "disc/loss": mean_list(train_info['disc_loss']).item(),
-                    "disc/agent_acc": mean_list(train_info['disc_agent_acc']).item(),
-                    "disc/demo_acc": mean_list(train_info['disc_demo_acc']).item(),
-                    "disc/agent_logit": mean_list(train_info['disc_agent_logit']).item(),
-                    "disc/demo_logit": mean_list(train_info['disc_demo_logit']).item(),
-                    "disc/grad_penalty": mean_list(train_info['disc_grad_penalty']).item(),
-                    "disc/logit_loss": mean_list(train_info['disc_logit_loss']).item(),
-                    "disc/reward_mean": disc_reward_mean.item(),
-                    "disc/reward_std": disc_reward_std.item(),
-                })
-            
+                disc_reward_std, disc_reward_mean = torch.std_mean(train_info["disc_rewards"])
+                train_info_dict.update(
+                    {
+                        "disc/loss": mean_list(train_info["disc_loss"]).item(),
+                        "disc/agent_acc": mean_list(train_info["disc_agent_acc"]).item(),
+                        "disc/demo_acc": mean_list(train_info["disc_demo_acc"]).item(),
+                        "disc/agent_logit": mean_list(train_info["disc_agent_logit"]).item(),
+                        "disc/demo_logit": mean_list(train_info["disc_demo_logit"]).item(),
+                        "disc/grad_penalty": mean_list(train_info["disc_grad_penalty"]).item(),
+                        "disc/logit_loss": mean_list(train_info["disc_logit_loss"]).item(),
+                        "disc/reward_mean": disc_reward_mean.item(),
+                        "disc/reward_std": disc_reward_std.item(),
+                    }
+                )
+
             if "returns" in train_info:
-                train_info_dict['rewards/returns'] = train_info['returns'].mean().item()
-                
+                train_info_dict["rewards/returns"] = train_info["returns"].mean().item()
+
             if "mb_rewards" in train_info:
-                train_info_dict['rewards/mb_rewards'] = train_info['mb_rewards'].mean().item()
-            
+                train_info_dict["rewards/mb_rewards"] = train_info["mb_rewards"].mean().item()
+
             if "reward_raw" in train_info:
-                reward_raw=train_info['reward_raw'].cpu().numpy().tolist()
-                train_info_dict["rewards/body_pos"] =  reward_raw[0]
-                train_info_dict["rewards/body_rot"] =  reward_raw[1]
-                train_info_dict["rewards/lin_vel"] =  reward_raw[2]
-                train_info_dict["rewards/ang_vel"] =  reward_raw[3]
-                train_info_dict["rewards/power"] =  reward_raw[4]
-            
+                reward_raw = train_info["reward_raw"].cpu().numpy().tolist()
+                train_info_dict["rewards/body_pos"] = reward_raw[0]
+                train_info_dict["rewards/body_rot"] = reward_raw[1]
+                train_info_dict["rewards/lin_vel"] = reward_raw[2]
+                train_info_dict["rewards/ang_vel"] = reward_raw[3]
+                train_info_dict["rewards/power"] = reward_raw[4]
+
             for k, v in train_info_dict.items():
                 self.writer.add_scalar(k, v, self.epoch_num)
-            
+
             if wandb.run is not None:
                 wandb.log(train_info_dict, step=self.epoch_num)
 
@@ -599,18 +608,14 @@ class PHCAgent:
             "value_size": 1,
         }
         self.experience_buffer = ExperienceBuffer(algo_info, self.device)
-        self.experience_buffer.tensor_dict["next_obses"] = torch.zeros_like(
-            self.experience_buffer.tensor_dict["obses"]
-        )
+        self.experience_buffer.tensor_dict["next_obses"] = torch.zeros_like(self.experience_buffer.tensor_dict["obses"])
         self.experience_buffer.tensor_dict["next_values"] = torch.zeros_like(
             self.experience_buffer.tensor_dict["values"]
         )
 
         batch_size = self.num_agents * self.num_actors
         current_rewards_shape = (batch_size, self.value_size)
-        self.current_rewards = torch.zeros(
-            current_rewards_shape, dtype=torch.float32, device=self.device
-        )
+        self.current_rewards = torch.zeros(current_rewards_shape, dtype=torch.float32, device=self.device)
         self.current_lengths = torch.zeros(batch_size, dtype=torch.float32, device=self.device)
         self.dones = torch.ones((batch_size,), dtype=torch.uint8, device=self.device)
 
@@ -634,10 +639,11 @@ class PHCAgent:
     def collect_data(self):
         self.set_eval()
 
-        done_indices = None
+        done_indices = []
         reward_raw = None
 
         for n in range(self.horizon_length):
+            # NOTE: done_indices = None resets all envs. done_indices = [] does not reset envs.
             self.obs = self.env_reset(done_indices)
             self.experience_buffer.update_data("obses", n, self.obs)
 
@@ -646,17 +652,15 @@ class PHCAgent:
                 self.experience_buffer.update_data(k, n, res_dict[k])
 
             # MATCH xcxc debug -- play steps, get_action_values (norlg)
+            # print(n, ", len dones", len(done_indices))
             # print("obs", self.obs.sum())
-            # print("ase latents", self._ase_latents.sum())
-            # print("rand action probs", self._rand_action_probs.sum())
-            # for k in res_dict.keys():
-            #     try:
-            #         print(k, res_dict[k].sum())
-            #     except:
-            #         pass
+            # print("actions", res_dict["actions"].sum())
 
             """Stepping the environment"""
             self.obs, rewards, self.dones, infos = self.env.step(res_dict["actions"])
+            # print("new_obs", self.obs.sum())
+            # print("rewards", rewards.sum())
+            # print("amp obs", infos["amp_obs"].sum())
 
             if self.value_size == 1:
                 rewards = rewards.unsqueeze(1)
@@ -670,7 +674,7 @@ class PHCAgent:
             self.experience_buffer.update_data("dones", n, self.dones)
             self.experience_buffer.update_data("amp_obs", n, infos["amp_obs"])
 
-            reward_raw_mean = infos['reward_raw'].mean(dim=0)
+            reward_raw_mean = infos["reward_raw"].mean(dim=0)
             if reward_raw is None:
                 reward_raw = reward_raw_mean
             else:
@@ -696,7 +700,7 @@ class PHCAgent:
             self.current_rewards = self.current_rewards * not_dones.unsqueeze(1)
             self.current_lengths = self.current_lengths * not_dones
 
-            if self.task_env.viewer:
+            if True or self.task_env.viewer:
                 self._amp_debug(infos)
 
         mb_fdones = self.experience_buffer.tensor_dict["dones"].float()
@@ -706,7 +710,7 @@ class PHCAgent:
         mb_rewards = self.experience_buffer.tensor_dict["rewards"]
         mb_amp_obs = self.experience_buffer.tensor_dict["amp_obs"]
         disc_rewards = self._calc_disc_rewards(mb_amp_obs)
-        
+
         # Combine the task and disc rewards
         mb_rewards *= self._task_reward_w
         mb_rewards += self._disc_reward_w * disc_rewards
@@ -714,13 +718,11 @@ class PHCAgent:
         mb_advs = self.discount_values(mb_fdones, mb_values, mb_rewards, mb_next_values)
         mb_returns = mb_advs + mb_values
 
-        batch_dict = self.experience_buffer.get_transformed_list(
-            swap_and_flatten01, self.tensor_list
-        )
+        batch_dict = self.experience_buffer.get_transformed_list(swap_and_flatten01, self.tensor_list)
         batch_dict["played_frames"] = self.batch_size
         batch_dict["returns"] = swap_and_flatten01(mb_returns)
-        batch_dict['mb_rewards'] = swap_and_flatten01(mb_rewards)
-        batch_dict['reward_raw'] =reward_raw / self.horizon_length
+        batch_dict["mb_rewards"] = swap_and_flatten01(mb_rewards)
+        batch_dict["reward_raw"] = reward_raw / self.horizon_length
         batch_dict["disc_rewards"] = swap_and_flatten01(disc_rewards)
 
         # MATCH xcxc debug -- play steps (norlg)
@@ -737,12 +739,15 @@ class PHCAgent:
             "obs": processed_obs,
         }
 
+        # MATCH xcxc debug -- get_action_values (norlg)
+        # print("preproc obs", processed_obs.sum())
+
         with torch.no_grad():
             res_dict = self.model(input_dict)
 
         if self.normalize_value:
             # CHECK ME: what's the difference between unnorm=True vs. False?
-            res_dict['values'] = self.value_mean_std(res_dict['values'], unnorm=True)
+            res_dict["values"] = self.value_mean_std(res_dict["values"], unnorm=True)
 
         return res_dict
 
@@ -789,7 +794,7 @@ class PHCAgent:
 
     def _amp_debug(self, info):
         with torch.no_grad():
-            amp_obs = info['amp_obs']
+            amp_obs = info["amp_obs"]
             amp_obs = amp_obs[0:1]
             disc_pred = self._eval_disc(amp_obs)
             disc_reward = self._calc_disc_rewards(amp_obs)
@@ -844,15 +849,11 @@ class PHCAgent:
             disc_agent_replay_logit = res_dict["disc_agent_replay_logit"]
             disc_demo_logit = res_dict["disc_demo_logit"]
 
-            a_info = self._clip_policy_loss(
-                old_action_log_probs_batch, action_log_probs, advantage, self.e_clip
-            )
+            a_info = self._clip_policy_loss(old_action_log_probs_batch, action_log_probs, advantage, self.e_clip)
             a_loss = a_info["actor_loss"]
             a_clipped = a_info["actor_clipped"].float()
 
-            c_info = self._clip_value_loss(
-                value_preds_batch, values, self.e_clip, return_batch, self.clip_value
-            )
+            c_info = self._clip_value_loss(value_preds_batch, values, self.e_clip, return_batch, self.clip_value)
             c_loss = c_info["critic_loss"]
 
             b_loss = self.bound_loss(mu)
@@ -881,14 +882,17 @@ class PHCAgent:
 
             self.optimizer.zero_grad()
 
-        # TODO: remove self.scaler
-        # self.scaler = torch.cuda.amp.GradScaler(enabled=self.mixed_precision)
-        self.scaler.scale(loss).backward()
-        self.scaler.step(self.optimizer)
-        self.scaler.update()
+        # Update the model
+        loss.backward()
+        if self.truncate_grads:
+            nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_norm)
+        self.optimizer.step()
 
         with torch.no_grad():
             kl_dist = policy_kl(mu.detach(), sigma.detach(), old_mu_batch, old_sigma_batch)
+
+        # MATCH xcxc debug -- loss backward (no rlg)
+        # print("loss backward", loss.sum())
 
         self.train_result = {
             "entropy": entropy,
@@ -903,9 +907,7 @@ class PHCAgent:
 
         return self.train_result
 
-    def _clip_policy_loss(
-        self, old_action_log_probs_batch, action_log_probs, advantage, curr_e_clip
-    ):
+    def _clip_policy_loss(self, old_action_log_probs_batch, action_log_probs, advantage, curr_e_clip):
         # clipping the policy loss
         ratio = torch.exp(old_action_log_probs_batch - action_log_probs)
         surr1 = advantage * ratio
@@ -917,9 +919,7 @@ class PHCAgent:
     def _clip_value_loss(self, value_preds_batch, values, curr_e_clip, return_batch, clip_value):
         # clipping the value loss
         if clip_value:
-            value_pred_clipped = value_preds_batch + (values - value_preds_batch).clamp(
-                -curr_e_clip, curr_e_clip
-            )
+            value_pred_clipped = value_preds_batch + (values - value_preds_batch).clamp(-curr_e_clip, curr_e_clip)
             value_losses = (values - return_batch) ** 2
             value_losses_clipped = (value_pred_clipped - return_batch) ** 2
             c_loss = torch.max(value_losses, value_losses_clipped)
@@ -939,11 +939,11 @@ class PHCAgent:
         return b_loss
 
     def _disc_loss(self, disc_agent_logit, disc_demo_logit, obs_demo):
-        '''
+        """
         disc_agent_logit: replay and current episode logit (fake examples)
-        disc_demo_logit: disc_demo_logit logit 
+        disc_demo_logit: disc_demo_logit logit
         obs_demo: gradient penalty demo obs (real examples)
-        '''
+        """
         # prediction loss
         disc_loss_agent = self._disc_loss_neg(disc_agent_logit)
         disc_loss_demo = self._disc_loss_pos(disc_demo_logit)
@@ -992,7 +992,7 @@ class PHCAgent:
         bce = torch.nn.BCEWithLogitsLoss()
         loss = bce(disc_logits, torch.zeros_like(disc_logits))
         return loss
-    
+
     def _disc_loss_pos(self, disc_logits):
         bce = torch.nn.BCEWithLogitsLoss()
         loss = bce(disc_logits, torch.ones_like(disc_logits))

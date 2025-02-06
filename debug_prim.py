@@ -35,6 +35,39 @@ RUN_EVAL = False
 WANDB_TRACK = False
 
 
+def seed_everything(seed, strict=False):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    if strict:
+        # refer to https://docs.nvidia.com/cuda/cublas/index.html#cublasApi_reproducibility
+        os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
+        torch.use_deterministic_algorithms(True)  # raises runtime error if not deterministic
+        # torch.set_deterministic_debug_mode("warn")  # prints out warnings if not deterministic
+
+
+def rebuild_model(agent, device):
+    try:
+        amp_shape = agent._amp_observation_space.shape
+    except:
+        amp_shape = agent.amp_observation_space.shape
+
+    config = {
+        "actions_num": agent.actions_num,
+        "input_shape": agent.obs_shape,
+        "amp_input_shape": amp_shape,
+    }
+
+    agent.model = agent.network.build(config)
+    agent.model.to(device)
+    agent.model.eval()
+
 # Replace rlgames' torch_runner and factories
 class Runner:
     def __init__(self, env_creator, algo_observer=None):
@@ -57,21 +90,7 @@ class Runner:
         self.load_check_point = params["load_checkpoint"]
         self.exp_config = None
 
-        if self.seed:
-            random.seed(self.seed)
-            np.random.seed(self.seed)
-            torch.manual_seed(self.seed)
-            os.environ["PYTHONHASHSEED"] = str(self.seed)
-            torch.cuda.manual_seed(self.seed)
-            torch.cuda.manual_seed_all(self.seed)
-
-            if params["config"]["device"] == "cpu":
-                # refer to https://docs.nvidia.com/cuda/cublas/index.html#cublasApi_reproducibility
-                os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
-                torch.backends.cudnn.benchmark = False
-                torch.backends.cudnn.deterministic = True
-                torch.use_deterministic_algorithms(True)  # raises runtime error if not deterministic
-                # torch.set_deterministic_debug_mode("warn")  # prints out warnings if not deterministic
+        seed_everything(self.seed, strict=params["config"]["device"] == "cpu")
 
         if self.load_check_point:
             print("Found checkpoint")
@@ -129,12 +148,16 @@ class Runner:
         else:
             agent = PHCAgent(self.config, self.env_creator)
             agent.config_train()
-            # vec_env = self.env_creator()
-            # vec_env = RLGPUEnvWrapper(vec_env)
-            # agent = ASEAgent(self.config, vec_env)
 
-        if self.load_check_point and (self.load_path is not None):
-            agent.restore(self.load_path)
+        # if self.load_check_point and (self.load_path is not None):
+        #     agent.restore(self.load_path)
+
+        seed_everything(self.seed, strict=self.config["device"] == "cpu")
+
+        # Make the random component the same
+        agent.dataset._shuffle_idx_buf()
+        rebuild_model(agent, self.config["device"])
+        # Also make the motionlib deterministic
 
         agent.train()
 
@@ -266,8 +289,9 @@ TRAIN_SINGLE_PRIM = [
     # "env.motion_file=sample_data/amass_isaac_standing_upright_slim.pkl",
     "env.motion_file=sample_data/amass_train_take6_upright.pkl",
     "env.num_envs=32",
-    "learning.params.config.minibatch_size=1024",
-    "learning.params.config.amp_minibatch_size=1024",
+    "learning.params.config.horizon_length=4",
+    "learning.params.config.minibatch_size=128",
+    "learning.params.config.amp_minibatch_size=128",
     # "learning.params.config.save_frequency=3",
     "device=cpu",
 ]

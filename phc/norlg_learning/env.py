@@ -34,9 +34,10 @@ def create_rlgpu_env(cfg, **kwargs):
 
 # This wrapper combines VecTask, VecTaskPython, VecTaskPythonWrapper, RLGPUEnvWrapper
 class VecTaskWrapper:
-    def __init__(self, task, clip_observations=None):
+    def __init__(self, task, clip_observations=None, clip_actions=True):
         self.task = task
         self.clip_obs = clip_observations
+        self.clip_actions = clip_actions
 
         self.num_environments = task.num_envs
         self.num_agents = 1  # used for multi-agent environments
@@ -101,6 +102,9 @@ class VecTaskWrapper:
             return self.full_state["obs"]
 
     def step(self, actions):
+        if self.clip_actions:
+            actions = torch.clamp(actions, -1.0, 1.0)
+
         obs, rewards, dones, infos = self.task.step(actions)
 
         if obs is None:

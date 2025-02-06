@@ -53,6 +53,7 @@ from phc import BODY_MODEL_DIR
 from phc.pufferl.poselib_skeleton import SkeletonMotion, SkeletonState
 from phc.pufferl import torch_utils
 
+IS_DETERMINISTIC = True
 USE_CACHE = False
 # print("MOVING MOTION DATA TO GPU, USING CACHE:", USE_CACHE)
 
@@ -160,9 +161,7 @@ class MotionLibBase:
 
         self.mesh_parsers = None
 
-        self.load_data(
-            self.m_cfg.motion_file, min_length=self.m_cfg.min_length, im_eval=self.m_cfg.im_eval
-        )
+        self.load_data(self.m_cfg.motion_file, min_length=self.m_cfg.min_length, im_eval=self.m_cfg.im_eval)
         self.setup_constants(fix_height=self.m_cfg.fix_height, multi_thread=self.m_cfg.multi_thread)
 
     def load_data(self, motion_file, min_length=-1, im_eval=False):
@@ -178,9 +177,7 @@ class MotionLibBase:
         if self.mode == MotionlibMode.file:
             if min_length != -1:
                 data_list = {
-                    k: v
-                    for k, v in list(self._motion_data_load.items())
-                    if len(v["pose_quat_global"]) >= min_length
+                    k: v for k, v in list(self._motion_data_load.items()) if len(v["pose_quat_global"]) >= min_length
                 }
             elif im_eval:
                 data_list = {
@@ -276,14 +273,14 @@ class MotionLibBase:
         self.num_joints = len(skeleton_trees[0].node_names)
         num_motion_to_load = len(skeleton_trees)
 
-        if random_sample:
-            sample_idxes = torch.multinomial(
-                self._sampling_prob, num_samples=num_motion_to_load, replacement=True
-            ).to(self._device)
+        if not IS_DETERMINISTIC and random_sample:
+            sample_idxes = torch.multinomial(self._sampling_prob, num_samples=num_motion_to_load, replacement=True).to(
+                self._device
+            )
         else:
-            sample_idxes = torch.remainder(
-                torch.arange(len(skeleton_trees)) + start_idx, self._num_unique_motions
-            ).to(self._device)
+            sample_idxes = torch.remainder(torch.arange(len(skeleton_trees)) + start_idx, self._num_unique_motions).to(
+                self._device
+            )
 
         # import ipdb; ipdb.set_trace()
         self._curr_motion_ids = sample_idxes
@@ -292,8 +289,7 @@ class MotionLibBase:
         ).to(self._device)  # Testing for obs_v5
         self.curr_motion_keys = self._motion_data_keys[sample_idxes]
         self._sampling_batch_prob = (
-            self._sampling_prob[self._curr_motion_ids]
-            / self._sampling_prob[self._curr_motion_ids].sum()
+            self._sampling_prob[self._curr_motion_ids] / self._sampling_prob[self._curr_motion_ids].sum()
         )
 
         print("\n****************************** Current motion keys ******************************")
@@ -368,38 +364,22 @@ class MotionLibBase:
 
             del curr_motion
 
-        self._motion_lengths = torch.tensor(
-            self._motion_lengths, device=self._device, dtype=torch.float32
-        )
+        self._motion_lengths = torch.tensor(self._motion_lengths, device=self._device, dtype=torch.float32)
         self._motion_fps = torch.tensor(self._motion_fps, device=self._device, dtype=torch.float32)
         self._motion_bodies = torch.stack(self._motion_bodies).to(self._device).type(torch.float32)
-        self._motion_aa = torch.tensor(
-            np.concatenate(self._motion_aa), device=self._device, dtype=torch.float32
-        )
+        self._motion_aa = torch.tensor(np.concatenate(self._motion_aa), device=self._device, dtype=torch.float32)
 
         self._motion_dt = torch.tensor(self._motion_dt, device=self._device, dtype=torch.float32)
         self._motion_num_frames = torch.tensor(self._motion_num_frames, device=self._device)
-        self._motion_limb_weights = torch.tensor(
-            np.array(limb_weights), device=self._device, dtype=torch.float32
-        )
+        self._motion_limb_weights = torch.tensor(np.array(limb_weights), device=self._device, dtype=torch.float32)
         self._num_motions = len(motions)
 
-        self.gts = (
-            torch.cat([m.global_translation for m in motions], dim=0).float().to(self._device)
-        )
+        self.gts = torch.cat([m.global_translation for m in motions], dim=0).float().to(self._device)
         self.grs = torch.cat([m.global_rotation for m in motions], dim=0).float().to(self._device)
         self.lrs = torch.cat([m.local_rotation for m in motions], dim=0).float().to(self._device)
-        self.grvs = (
-            torch.cat([m.global_root_velocity for m in motions], dim=0).float().to(self._device)
-        )
-        self.gravs = (
-            torch.cat([m.global_root_angular_velocity for m in motions], dim=0)
-            .float()
-            .to(self._device)
-        )
-        self.gavs = (
-            torch.cat([m.global_angular_velocity for m in motions], dim=0).float().to(self._device)
-        )
+        self.grvs = torch.cat([m.global_root_velocity for m in motions], dim=0).float().to(self._device)
+        self.gravs = torch.cat([m.global_root_angular_velocity for m in motions], dim=0).float().to(self._device)
+        self.gavs = torch.cat([m.global_angular_velocity for m in motions], dim=0).float().to(self._device)
         self.gvs = torch.cat([m.global_velocity for m in motions], dim=0).float().to(self._device)
         self.dvs = torch.cat([m.dof_vels for m in motions], dim=0).float().to(self._device)
 
@@ -413,9 +393,7 @@ class MotionLibBase:
 
         num_motions = self.num_motions()
         total_len = self.get_total_length()
-        print(
-            f"Loaded {num_motions:d} motions with a total length of {total_len:.3f}s and {self.gts.shape[0]} frames."
-        )
+        print(f"Loaded {num_motions:d} motions with a total length of {total_len:.3f}s and {self.gts.shape[0]} frames.")
         return motions
 
     def num_motions(self):
@@ -482,10 +460,7 @@ class MotionLibBase:
             )  # For use in sampling batches
 
     def update_sampling_prob(self, termination_history):
-        if (
-            len(termination_history) == len(self._termination_history)
-            and termination_history.sum() > 0
-        ):
+        if len(termination_history) == len(self._termination_history) and termination_history.sum() > 0:
             self._sampling_prob[:] = termination_history / termination_history.sum()
             self._termination_history = termination_history
             return True
@@ -501,9 +476,7 @@ class MotionLibBase:
     #     # print("termination history: ", self._termination_history[self._curr_motion_ids])
 
     def sample_motions(self, n):
-        motion_ids = torch.multinomial(
-            self._sampling_batch_prob, num_samples=n, replacement=True
-        ).to(self._device)
+        motion_ids = torch.multinomial(self._sampling_batch_prob, num_samples=n, replacement=True).to(self._device)
 
         return motion_ids
 
@@ -539,11 +512,7 @@ class MotionLibBase:
         if motion_ids is None:
             return (self._motion_num_frames * self._sim_fps / self._motion_fps).ceil().int()
         else:
-            return (
-                (self._motion_num_frames[motion_ids] * self._sim_fps / self._motion_fps)
-                .ceil()
-                .int()
-            )
+            return (self._motion_num_frames[motion_ids] * self._sim_fps / self._motion_fps).ceil().int()
 
     def get_motion_state(self, motion_ids, motion_times, offset=None):
         # n = len(motion_ids)
@@ -553,9 +522,7 @@ class MotionLibBase:
         num_frames = self._motion_num_frames[motion_ids]
         dt = self._motion_dt[motion_ids]
 
-        frame_idx0, frame_idx1, blend = self._calc_frame_blend(
-            motion_times, motion_len, num_frames, dt
-        )
+        frame_idx0, frame_idx1, blend = self._calc_frame_blend(motion_times, motion_len, num_frames, dt)
         # print("non_interval", frame_idx0, frame_idx1)
         f0l = frame_idx0 + self.length_starts[motion_ids]
         f1l = frame_idx1 + self.length_starts[motion_ids]
@@ -597,9 +564,7 @@ class MotionLibBase:
         if offset is None:
             rg_pos = (1.0 - blend_exp) * rg_pos0 + blend_exp * rg_pos1  # ZL: apply offset
         else:
-            rg_pos = (
-                (1.0 - blend_exp) * rg_pos0 + blend_exp * rg_pos1 + offset[..., None, :]
-            )  # ZL: apply offset
+            rg_pos = (1.0 - blend_exp) * rg_pos0 + blend_exp * rg_pos1 + offset[..., None, :]  # ZL: apply offset
 
         body_vel = (1.0 - blend_exp) * body_vel0 + blend_exp * body_vel1
         body_ang_vel = (1.0 - blend_exp) * body_ang_vel0 + blend_exp * body_ang_vel1
@@ -636,9 +601,7 @@ class MotionLibBase:
         num_frames = self._motion_num_frames[motion_ids]
         dt = self._motion_dt[motion_ids]
 
-        frame_idx0, frame_idx1, blend = self._calc_frame_blend(
-            motion_times, motion_len, num_frames, dt
-        )
+        frame_idx0, frame_idx1, blend = self._calc_frame_blend(motion_times, motion_len, num_frames, dt)
         # print("non_interval", frame_idx0, frame_idx1)
         f0l = frame_idx0 + self.length_starts[motion_ids]
         f1l = frame_idx1 + self.length_starts[motion_ids]
@@ -665,9 +628,7 @@ class MotionLibBase:
 
         frame_idx0 = (phase * (num_frames - 1)).long()
         frame_idx1 = torch.min(frame_idx0 + 1, num_frames - 1)
-        blend = torch.clip(
-            (time - frame_idx0 * dt) / dt, 0.0, 1.0
-        )  # clip blend to be within 0 and 1
+        blend = torch.clip((time - frame_idx0 * dt) / dt, 0.0, 1.0)  # clip blend to be within 0 and 1
 
         return frame_idx0, frame_idx1, blend
 
@@ -735,15 +696,12 @@ class MotionLibSMPL(MotionLibBase):
                     .squeeze()
                 )
                 diff_fix = (
-                    (vertices_curr[:, pick] - offset[:, None])[:frame_check, ..., -1]
-                    .min(dim=-1)
-                    .values
+                    (vertices_curr[:, pick] - offset[:, None])[:frame_check, ..., -1].min(dim=-1).values
                     - height_tolorance
                 ).min()  # Only acount the first 30 frames, which usually is a calibration phase.
             elif fix_height_mode == FixHeightMode.full_fix:
                 diff_fix = (
-                    (vertices_curr - offset[:, None])[:frame_check, ..., -1].min(dim=-1).values
-                    - height_tolorance
+                    (vertices_curr - offset[:, None])[:frame_check, ..., -1].min(dim=-1).values - height_tolorance
                 ).min()  # Only acount the first 30 frames, which usually is a calibration phase.
 
             trans[..., -1] -= diff_fix
@@ -763,7 +721,8 @@ class MotionLibSMPL(MotionLibBase):
         # ZL: loading motion with the specified skeleton. Perfoming forward kinematics to get the joint positions
         max_len = config.max_length
         fix_height = config.fix_height
-        np.random.seed(np.random.randint(5000) * pid)
+        if not IS_DETERMINISTIC:
+            np.random.seed(np.random.randint(5000) * pid)
         res = {}
         assert len(ids) == len(motion_data_list)
 
@@ -784,7 +743,7 @@ class MotionLibSMPL(MotionLibBase):
             if max_len == -1 or seq_len < max_len:
                 start, end = 0, seq_len
             else:
-                start = random.randint(0, seq_len - max_len)
+                start = 0 if IS_DETERMINISTIC else random.randint(0, seq_len - max_len)
                 end = start + max_len
 
             trans = curr_file["root_trans_offset"].clone()[start:end]
@@ -795,18 +754,15 @@ class MotionLibSMPL(MotionLibBase):
             B, J, N = pose_quat_global.shape
 
             ##### ZL: randomize the heading ######
-            random_rot = np.zeros(3)
-            random_rot[2] = np.pi * (2 * np.random.random() - 1.0)
-            random_heading_rot = sRot.from_euler("xyz", random_rot)
-            pose_aa[:, :3] = torch.tensor(
-                (random_heading_rot * sRot.from_rotvec(pose_aa[:, :3])).as_rotvec()
-            )
-            pose_quat_global = (
-                (random_heading_rot * sRot.from_quat(pose_quat_global.reshape(-1, 4)))
-                .as_quat()
-                .reshape(B, J, N)
-            )
-            trans = torch.matmul(trans, torch.from_numpy(random_heading_rot.as_matrix().T))
+            if not IS_DETERMINISTIC:
+                random_rot = np.zeros(3)
+                random_rot[2] = np.pi * (2 * np.random.random() - 1.0)
+                random_heading_rot = sRot.from_euler("xyz", random_rot)
+                pose_aa[:, :3] = torch.tensor((random_heading_rot * sRot.from_rotvec(pose_aa[:, :3])).as_rotvec())
+                pose_quat_global = (
+                    (random_heading_rot * sRot.from_quat(pose_quat_global.reshape(-1, 4))).as_quat().reshape(B, J, N)
+                )
+                trans = torch.matmul(trans, torch.from_numpy(random_heading_rot.as_matrix().T))
             ##### ZL: randomize the heading ######
 
             if mesh_parsers is not None:

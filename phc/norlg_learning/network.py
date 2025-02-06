@@ -166,6 +166,14 @@ class ModelAMPContinuous:
             is_train = input_dict.get("is_train", True)
             prev_actions = input_dict.get("prev_actions", None)
             mu, logstd, value, _ = self.a2c_network(input_dict)
+
+            # xcxc debug -- forward (both)
+            # print()
+            # print("mu", mu.sum())
+            # print("logstd", logstd.sum())
+            # print("value", value.sum())
+            # print()
+
             sigma = torch.exp(logstd)
             distr = torch.distributions.Normal(mu, sigma)
 
