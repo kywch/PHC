@@ -114,6 +114,11 @@ class CommonAgent(a2c_continuous.A2CAgent):
 
         self._init_train()
 
+        # MATCH xcxc debug -- init (rlg)
+        # print("obs", self.obs["obs"].sum())
+        # print("amb obs", self._amp_obs_demo_buffer._data_buf["amp_obs"].sum())
+        # print("amp dataset idx", self.dataset._idx_buf[0])
+
         while True:
             epoch_start = time.time()
 
@@ -277,6 +282,9 @@ class CommonAgent(a2c_continuous.A2CAgent):
             "obs_orig": obs_orig,
             'rnn_states' : self.rnn_states
         }
+
+        # xcxc debug -- get_action_values (rlg)
+        # print("preproc obs", processed_obs.sum())
 
         with torch.no_grad():
             res_dict = self.model(input_dict)

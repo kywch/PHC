@@ -529,11 +529,12 @@ class AMPAgent(common_agent.CommonAgent):
 
         # MATCH xcxc debug -- train epoch (rlg)
         # for k in ["kl", "entropy", "actor_loss", "critic_loss", "b_loss", "disc_loss", "disc_agent_logit", "disc_rewards"]:
-        for k in ["kl"]:
-            if isinstance(train_info[k], list):
-                print(k, torch.stack(train_info[k]).sum())
-            else:
-                print(k, train_info[k].sum())
+        if self.ppo_device == "cpu":
+            for k in ["kl"]:
+                if isinstance(train_info[k], list):
+                    print(k, torch.stack(train_info[k]).sum())
+                else:
+                    print(k, train_info[k].sum())
 
         return train_info
 
@@ -633,6 +634,12 @@ class AMPAgent(common_agent.CommonAgent):
             
             
         with torch.cuda.amp.autocast(enabled=self.mixed_precision):
+            # xcxc debug
+            # print("obs", batch_dict['obs'].sum())
+            # print("amp obs", batch_dict['amp_obs'].sum())
+            # print("amp_obs_demo", batch_dict['amp_obs_demo'].sum())
+            # print("ampb_obs_demo", batch_dict['amp_obs_demo'].sum())
+
             res_dict = self.model(batch_dict) # current model if RNN, has BPTT enabled. 
             
             action_log_probs = res_dict['prev_neglogp']
@@ -651,7 +658,11 @@ class AMPAgent(common_agent.CommonAgent):
                         entropy[rnn_mask_bool], mu[rnn_mask_bool], sigma[rnn_mask_bool], return_batch[rnn_mask_bool], old_mu_batch[rnn_mask_bool], old_sigma_batch[rnn_mask_bool]
                 
                 # flatten values for computing loss
-                
+            
+            # xcxc debug -- clip policy loss (rlg)
+            if self.ppo_device == "cpu":
+                print("action_log_probs", action_log_probs.sum(), (action_log_probs**2).sum())
+                print("advantage", advantage.sum(), (advantage**2).sum())
                 
             a_info = self._actor_loss(old_action_log_probs_batch, action_log_probs, advantage, curr_e_clip)
             a_loss = a_info['actor_loss']
@@ -682,8 +693,9 @@ class AMPAgent(common_agent.CommonAgent):
             c_info['critic_loss'] = c_loss
 
             # MATCH xcxc debug -- loss calculation (rlg)
-            print("a loss", a_loss.sum())
-            print("a_clip_frac", a_clip_frac.sum())
+            if self.ppo_device == "cpu":
+                print("a loss", a_loss.sum())
+                print("a_clip_frac", a_clip_frac.sum())
             # print("c loss", c_loss.sum())
             # print("b loss", b_loss.sum())
 
@@ -702,11 +714,12 @@ class AMPAgent(common_agent.CommonAgent):
                 kl_dist = kl_dist.mean()
 
         # Print gradient stats before optimizer step
-        actor_grad_norm = 0
-        for p in self.model.a2c_network.parameters():
-            if p.grad is not None:
-                actor_grad_norm += p.grad.norm().item()
-        print(f"Before clip grad norm: {actor_grad_norm}")
+        if self.ppo_device == "cpu":
+            actor_grad_norm = 0
+            for p in self.model.a2c_network.parameters():
+                if p.grad is not None:
+                    actor_grad_norm += p.grad.norm().item()
+            print(f"Before clip grad norm: {actor_grad_norm}")
 
         #TODO: Refactor this ugliest code of the year
         if self.truncate_grads:
@@ -722,11 +735,12 @@ class AMPAgent(common_agent.CommonAgent):
                 nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_norm)
 
                 # xcxc Print gradient stats before optimizer step
-                actor_grad_norm = 0
-                for p in self.model.a2c_network.parameters():
-                    if p.grad is not None:
-                        actor_grad_norm += p.grad.norm().item()
-                print(f"After clip grad norm: {actor_grad_norm}")
+                if self.ppo_device == "cpu":
+                    actor_grad_norm = 0
+                    for p in self.model.a2c_network.parameters():
+                        if p.grad is not None:
+                            actor_grad_norm += p.grad.norm().item()
+                    print(f"After clip grad norm: {actor_grad_norm}")
 
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
@@ -735,8 +749,9 @@ class AMPAgent(common_agent.CommonAgent):
             self.scaler.update()
 
         # MATCH xcxc debug -- loss backward (rlg)
-        print("loss backward", loss.sum())
-        print()
+        if self.ppo_device == "cpu":
+            print("loss backward", loss.sum())
+            print()
 
         self.train_result.update( {'entropy': entropy, 'kl': kl_dist, 'last_lr': self.last_lr, 'lr_mul': lr_mul, 'b_loss': b_loss})
         self.train_result.update(a_info)

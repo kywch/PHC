@@ -46,11 +46,11 @@ def create_rlgpu_env(**kwargs):
         headless=args.headless
     )
 
-    env = VecTaskWrapper(task, args.rl_device, cfg_train.get("clip_observations", np.inf))
+    env = VecTaskWrapper(task)
 
-    print(env.num_envs)
+    print(env.num_environments)
     print(env.num_actions)
-    print(env.num_obs)
+    print(env.num_observations)
     print(env.num_states)
 
     return env
