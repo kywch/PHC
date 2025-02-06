@@ -509,11 +509,11 @@ class PHCAgent:
 
             # MATCH xcxc debug -- train epoch (norlg)
             #for k in ["kl", "entropy", "actor_loss", "critic_loss", "b_loss", "disc_loss", "disc_agent_logit", "disc_rewards"]:
-            for k in ["kl"]:
-                if isinstance(train_info[k], list):
-                    print(k, torch.stack(train_info[k]).sum())
-                else:
-                    print(k, train_info[k].sum())
+            # for k in ["kl"]:
+            #     if isinstance(train_info[k], list):
+            #         print(k, torch.stack(train_info[k]).sum())
+            #     else:
+            #         print(k, train_info[k].sum())
 
             ### Log the stats
             sum_time = time.time() - start_time
@@ -863,8 +863,8 @@ class PHCAgent:
             disc_demo_logit = res_dict["disc_demo_logit"]
 
             # xcxc debug -- clip policy loss (no rlg)
-            print("action_log_probs", action_log_probs.sum(), (action_log_probs**2).sum())
-            print("advantage", advantage.sum(), (advantage**2).sum())
+            # print("action_log_probs", action_log_probs.sum(), (action_log_probs**2).sum())
+            # print("advantage", advantage.sum(), (advantage**2).sum())
 
             a_info = self._clip_policy_loss(old_action_log_probs_batch, action_log_probs, advantage, self.e_clip)
             a_loss = a_info["actor_loss"]
@@ -898,8 +898,8 @@ class PHCAgent:
             c_info["critic_loss"] = c_loss
 
             # MATCH xcxc debug -- loss calculation (no rlg)
-            print("a loss", a_loss.sum())
-            print("a_clip_frac", a_clip_frac.sum())
+            # print("a loss", a_loss.sum())
+            # print("a_clip_frac", a_clip_frac.sum())
             # print("c loss", c_loss.sum())
             # print("b loss", b_loss.sum())
 
@@ -907,12 +907,13 @@ class PHCAgent:
 
         self.scaler.scale(loss).backward()
 
-        # Print gradient stats before optimizer step
-        actor_grad_norm = 0
-        for p in self.model.a2c_network.parameters():
-            if p.grad is not None:
-                actor_grad_norm += p.grad.norm().item()
-        print(f"Before clip grad norm: {actor_grad_norm}")
+        # xcxc debug
+        # # Print gradient stats before optimizer step
+        # actor_grad_norm = 0
+        # for p in self.model.a2c_network.parameters():
+        #     if p.grad is not None:
+        #         actor_grad_norm += p.grad.norm().item()
+        # print(f"Before clip grad norm: {actor_grad_norm}")
 
         if self.truncate_grads:
             self.scaler.unscale_(self.optimizer)
@@ -920,12 +921,13 @@ class PHCAgent:
         self.scaler.step(self.optimizer)
         self.scaler.update()
 
-        # Print gradient stats before optimizer step
-        actor_grad_norm = 0
-        for p in self.model.a2c_network.parameters():
-            if p.grad is not None:
-                actor_grad_norm += p.grad.norm().item()
-        print(f"After clip grad norm: {actor_grad_norm}")
+        # xcxc debug
+        # # Print gradient stats before optimizer step
+        # actor_grad_norm = 0
+        # for p in self.model.a2c_network.parameters():
+        #     if p.grad is not None:
+        #         actor_grad_norm += p.grad.norm().item()
+        # print(f"After clip grad norm: {actor_grad_norm}")
 
         # # Update the model, without the scaler
         # self.optimizer.zero_grad(set_to_none=True)
@@ -938,8 +940,8 @@ class PHCAgent:
             kl_dist = policy_kl(mu.detach(), sigma.detach(), old_mu_batch, old_sigma_batch)
 
         # xcxc debug -- loss backward (no rlg)
-        print("loss backward", loss.sum())
-        print()
+        # print("loss backward", loss.sum())
+        # print()
 
         self.train_result = {
             "entropy": entropy,

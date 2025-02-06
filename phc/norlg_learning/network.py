@@ -169,9 +169,9 @@ class ModelAMPContinuous:
 
             # xcxc debug -- forward (both)
             # print()
-            if prev_actions is not None:
-                print("prev_actions", prev_actions.sum())
-                print("mu", mu.sum())
+            # if prev_actions is not None:
+            #     print("prev_actions", prev_actions.sum())
+            #     print("mu", mu.sum())
             # print("mu", mu.sum())
             # print("logstd", logstd.sum())
             # print("value", value.sum())
