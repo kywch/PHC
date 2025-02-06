@@ -44,7 +44,11 @@ def main(cfg_hydra: DictConfig) -> None:
     cfg_train['params']['config']['network_path'] = cfg.output_path
     cfg_train['params']['config']['train_dir'] = cfg.output_path
     cfg_train["params"]["config"]["num_actors"] = cfg.env.num_envs
-    
+
+    if cfg.get("device", None):
+        cfg_train["device"] = cfg.device
+        cfg_train["params"]["config"]["device"] = cfg.device
+
     if cfg.epoch > 0:
         cfg_train["params"]["load_checkpoint"] = True
         cfg_train["params"]["load_path"] = osp.join(cfg.output_path, cfg_train["params"]["config"]['name'] + "_" + str(cfg.epoch).zfill(8) + '.pth')
