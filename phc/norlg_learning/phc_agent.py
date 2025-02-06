@@ -801,7 +801,7 @@ class PHCAgent:
 
             disc_pred = disc_pred.detach().cpu().numpy()[0, 0]
             disc_reward = disc_reward.cpu().numpy()[0, 0]
-            print("disc_pred: ", disc_pred, disc_reward)
+            # print("disc_pred: ", disc_pred, disc_reward)
 
     #####################################################################
 
@@ -836,53 +836,51 @@ class PHCAgent:
             "amp_obs_replay": amp_obs_replay,
             "amp_obs_demo": amp_obs_demo,
         }
+        res_dict = self.model(batch_dict)
 
-        with torch.cuda.amp.autocast(enabled=self.mixed_precision):
-            res_dict = self.model(batch_dict)
+        # Calculate loss
+        action_log_probs = res_dict["prev_neglogp"]
+        values = res_dict["values"]
+        entropy = res_dict["entropy"]
+        mu = res_dict["mus"]
+        sigma = res_dict["sigmas"]
+        disc_agent_logit = res_dict["disc_agent_logit"]
+        disc_agent_replay_logit = res_dict["disc_agent_replay_logit"]
+        disc_demo_logit = res_dict["disc_demo_logit"]
 
-            action_log_probs = res_dict["prev_neglogp"]
-            values = res_dict["values"]
-            entropy = res_dict["entropy"]
-            mu = res_dict["mus"]
-            sigma = res_dict["sigmas"]
-            disc_agent_logit = res_dict["disc_agent_logit"]
-            disc_agent_replay_logit = res_dict["disc_agent_replay_logit"]
-            disc_demo_logit = res_dict["disc_demo_logit"]
+        a_info = self._clip_policy_loss(old_action_log_probs_batch, action_log_probs, advantage, self.e_clip)
+        a_loss = a_info["actor_loss"]
+        a_clipped = a_info["actor_clipped"].float()
 
-            a_info = self._clip_policy_loss(old_action_log_probs_batch, action_log_probs, advantage, self.e_clip)
-            a_loss = a_info["actor_loss"]
-            a_clipped = a_info["actor_clipped"].float()
+        c_info = self._clip_value_loss(value_preds_batch, values, self.e_clip, return_batch, self.clip_value)
+        c_loss = c_info["critic_loss"]
 
-            c_info = self._clip_value_loss(value_preds_batch, values, self.e_clip, return_batch, self.clip_value)
-            c_loss = c_info["critic_loss"]
+        b_loss = self.bound_loss(mu)
 
-            b_loss = self.bound_loss(mu)
+        a_loss = torch.mean(a_loss)
+        a_clip_frac = torch.mean(a_clipped)
+        c_loss = torch.mean(c_loss)
+        b_loss = torch.mean(b_loss)
+        entropy = torch.mean(entropy)
 
-            a_loss = torch.mean(a_loss)
-            a_clip_frac = torch.mean(a_clipped)
-            c_loss = torch.mean(c_loss)
-            b_loss = torch.mean(b_loss)
-            entropy = torch.mean(entropy)
+        disc_agent_cat_logit = torch.cat([disc_agent_logit, disc_agent_replay_logit], dim=0)
+        disc_info = self._disc_loss(disc_agent_cat_logit, disc_demo_logit, amp_obs_demo)
+        disc_loss = disc_info["disc_loss"]
 
-            disc_agent_cat_logit = torch.cat([disc_agent_logit, disc_agent_replay_logit], dim=0)
-            disc_info = self._disc_loss(disc_agent_cat_logit, disc_demo_logit, amp_obs_demo)
-            disc_loss = disc_info["disc_loss"]
+        loss = (
+            a_loss
+            + self.critic_coef * c_loss
+            - self.entropy_coef * entropy
+            + self.bounds_loss_coef * b_loss
+            + self._disc_coef * disc_loss
+        )
 
-            loss = (
-                a_loss
-                + self.critic_coef * c_loss
-                - self.entropy_coef * entropy
-                + self.bounds_loss_coef * b_loss
-                + self._disc_coef * disc_loss
-            )
-
-            a_info["actor_loss"] = a_loss
-            a_info["actor_clip_frac"] = a_clip_frac
-            c_info["critic_loss"] = c_loss
-
-            self.optimizer.zero_grad()
+        a_info["actor_loss"] = a_loss
+        a_info["actor_clip_frac"] = a_clip_frac
+        c_info["critic_loss"] = c_loss
 
         # Update the model
+        self.optimizer.zero_grad()
         loss.backward()
         if self.truncate_grads:
             nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_norm)

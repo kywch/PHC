@@ -239,10 +239,13 @@ def main(cfg_hydra: DictConfig) -> None:
 
     # Create default directories for weights and statistics
     cfg_train = cfg.learning
-    cfg_train["params"]["config"]["device"] = cfg.device
     cfg_train["params"]["config"]["network_path"] = cfg.output_path
     cfg_train["params"]["config"]["train_dir"] = cfg.output_path
     cfg_train["params"]["config"]["num_actors"] = cfg.env.num_envs
+
+    if cfg.get("device", None):
+        cfg_train["device"] = cfg.device
+        cfg_train["params"]["config"]["device"] = cfg.device
 
     if cfg.epoch > 0:
         cfg_train["params"]["load_checkpoint"] = True
@@ -293,7 +296,7 @@ TRAIN_SINGLE_PRIM = [
     "learning.params.config.minibatch_size=128",
     "learning.params.config.amp_minibatch_size=128",
     # "learning.params.config.save_frequency=3",
-    "device=cpu",
+    # "device=cpu",
 ]
 
 EVALUATE_SINGLE_PRIM = [
