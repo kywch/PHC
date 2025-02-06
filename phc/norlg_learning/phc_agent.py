@@ -165,10 +165,16 @@ class PHCAgent:
         # NOTE: PHC uses the frozen running mean/std during training.
         # TODO: Compare if use_temp is needed.
         if self.normalize_input:
-            obs_batch = self.running_mean_std(obs_batch)
             if use_temp:
+                # Just updating the running mean/std
+                self.running_mean_std(obs_batch)
+
                 # Return the norm obs using the frozen running mean/std
                 obs_batch = self.running_mean_std_temp(obs_batch)
+
+            else:
+                obs_batch = self.running_mean_std(obs_batch)
+
         return obs_batch
 
     #####################################################################
@@ -856,6 +862,10 @@ class PHCAgent:
             disc_agent_replay_logit = res_dict["disc_agent_replay_logit"]
             disc_demo_logit = res_dict["disc_demo_logit"]
 
+            # xcxc debug -- clip policy loss (no rlg)
+            print("action_log_probs", action_log_probs.sum(), (action_log_probs**2).sum())
+            print("advantage", advantage.sum(), (advantage**2).sum())
+
             a_info = self._clip_policy_loss(old_action_log_probs_batch, action_log_probs, advantage, self.e_clip)
             a_loss = a_info["actor_loss"]
             a_clipped = a_info["actor_clipped"].float()
@@ -893,7 +903,7 @@ class PHCAgent:
             # print("c loss", c_loss.sum())
             # print("b loss", b_loss.sum())
 
-            self.optimizer.zero_grad()
+            self.optimizer.zero_grad(set_to_none=True)
 
         self.scaler.scale(loss).backward()
 
@@ -918,7 +928,7 @@ class PHCAgent:
         print(f"After clip grad norm: {actor_grad_norm}")
 
         # # Update the model, without the scaler
-        # self.optimizer.zero_grad()
+        # self.optimizer.zero_grad(set_to_none=True)
         # loss.backward()
         # if self.truncate_grads:
         #     nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_norm)
