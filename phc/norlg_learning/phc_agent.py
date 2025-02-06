@@ -63,9 +63,6 @@ class PHCAgent:
         self.actions_num = self.action_space.shape[0]
         self.value_size = 1
 
-        # TODO: move action cliping to somewhere else?
-        self.clip_actions = True  # config.get("clip_actions", True)
-
         self.states = None  # No RNN
         self.batch_size = 1
 
@@ -245,10 +242,7 @@ class PHCAgent:
         else:
             current_action = action
 
-        if self.clip_actions:
-            return torch.clamp(current_action, -1.0, 1.0)
-        else:
-            return current_action
+        return current_action
 
     #####################################################################
     ### Training: IMAmpAgent/AMPAgent/CommonAgent.train()
@@ -289,6 +283,11 @@ class PHCAgent:
         # PHC uses gradient clipping
         self.truncate_grads = True  # self.config.get('truncate_grads', False)
         self.grad_norm = self.config["grad_norm"]  # 50
+
+        # But the grad_norm seems to be off... 
+        # TODO: Remove this
+        self.mixed_precision = self.config.get('mixed_precision', False)
+        self.scaler = torch.cuda.amp.GradScaler(enabled=self.mixed_precision)
 
         # Loss weights
         self.critic_coef = self.config.get("critic_coef", 5.0)
@@ -408,7 +407,6 @@ class PHCAgent:
             batch_dict["amp_obs_replay"] = amp_obs_replay
 
             # MATCH xcxc debug -- amp obs buffers (norlg)
-            # print()
             # print("returns", batch_dict["returns"].sum())
             # print("amp_obs_demo", amp_obs_demo.sum())
             # print("amp_obs_replay", amp_obs_replay.sum())
@@ -452,6 +450,13 @@ class PHCAgent:
                 "amp_obs_replay": batch_dict["amp_obs_replay"],
             }
             self.dataset.update_values_dict(dataset_dict)
+
+            # xcxc debug -- prepare dataset (no rlg)
+            # for k, v in dataset_dict.items():
+            #     try:
+            #         print(k, v.sum())
+            #     except:
+            #         pass
 
             for _ in range(0, self.update_epochs):
                 for i in range(len(self.dataset)):
@@ -497,11 +502,12 @@ class PHCAgent:
             # self.running_mean_std_temp.freeze()
 
             # MATCH xcxc debug -- train epoch (norlg)
-            # for k in ["kl", "entropy", "actor_loss", "critic_loss", "b_loss", "disc_loss", "disc_agent_logit", "disc_rewards"]:
-            #     if isinstance(train_info[k], list):
-            #         print(k, torch.stack(train_info[k]).sum())
-            #     else:
-            #         print(k, train_info[k].sum())
+            #for k in ["kl", "entropy", "actor_loss", "critic_loss", "b_loss", "disc_loss", "disc_agent_logit", "disc_rewards"]:
+            for k in ["kl"]:
+                if isinstance(train_info[k], list):
+                    print(k, torch.stack(train_info[k]).sum())
+                else:
+                    print(k, train_info[k].sum())
 
             ### Log the stats
             sum_time = time.time() - start_time
@@ -836,61 +842,94 @@ class PHCAgent:
             "amp_obs_replay": amp_obs_replay,
             "amp_obs_demo": amp_obs_demo,
         }
-        res_dict = self.model(batch_dict)
+        
+        with torch.cuda.amp.autocast(enabled=self.mixed_precision):
+            res_dict = self.model(batch_dict)
 
-        # Calculate loss
-        action_log_probs = res_dict["prev_neglogp"]
-        values = res_dict["values"]
-        entropy = res_dict["entropy"]
-        mu = res_dict["mus"]
-        sigma = res_dict["sigmas"]
-        disc_agent_logit = res_dict["disc_agent_logit"]
-        disc_agent_replay_logit = res_dict["disc_agent_replay_logit"]
-        disc_demo_logit = res_dict["disc_demo_logit"]
+            # Calculate loss
+            action_log_probs = res_dict["prev_neglogp"]
+            values = res_dict["values"]
+            entropy = res_dict["entropy"]
+            mu = res_dict["mus"]
+            sigma = res_dict["sigmas"]
+            disc_agent_logit = res_dict["disc_agent_logit"]
+            disc_agent_replay_logit = res_dict["disc_agent_replay_logit"]
+            disc_demo_logit = res_dict["disc_demo_logit"]
 
-        a_info = self._clip_policy_loss(old_action_log_probs_batch, action_log_probs, advantage, self.e_clip)
-        a_loss = a_info["actor_loss"]
-        a_clipped = a_info["actor_clipped"].float()
+            a_info = self._clip_policy_loss(old_action_log_probs_batch, action_log_probs, advantage, self.e_clip)
+            a_loss = a_info["actor_loss"]
+            a_clipped = a_info["actor_clipped"].float()
 
-        c_info = self._clip_value_loss(value_preds_batch, values, self.e_clip, return_batch, self.clip_value)
-        c_loss = c_info["critic_loss"]
+            c_info = self._clip_value_loss(value_preds_batch, values, self.e_clip, return_batch, self.clip_value)
+            c_loss = c_info["critic_loss"]
 
-        b_loss = self.bound_loss(mu)
+            b_loss = self.bound_loss(mu)
 
-        a_loss = torch.mean(a_loss)
-        a_clip_frac = torch.mean(a_clipped)
-        c_loss = torch.mean(c_loss)
-        b_loss = torch.mean(b_loss)
-        entropy = torch.mean(entropy)
+            a_loss = torch.mean(a_loss)
+            a_clip_frac = torch.mean(a_clipped)
+            c_loss = torch.mean(c_loss)
+            b_loss = torch.mean(b_loss)
+            entropy = torch.mean(entropy)
 
-        disc_agent_cat_logit = torch.cat([disc_agent_logit, disc_agent_replay_logit], dim=0)
-        disc_info = self._disc_loss(disc_agent_cat_logit, disc_demo_logit, amp_obs_demo)
-        disc_loss = disc_info["disc_loss"]
+            disc_agent_cat_logit = torch.cat([disc_agent_logit, disc_agent_replay_logit], dim=0)
+            disc_info = self._disc_loss(disc_agent_cat_logit, disc_demo_logit, amp_obs_demo)
+            disc_loss = disc_info["disc_loss"]
 
-        loss = (
-            a_loss
-            + self.critic_coef * c_loss
-            - self.entropy_coef * entropy
-            + self.bounds_loss_coef * b_loss
-            + self._disc_coef * disc_loss
-        )
+            loss = (
+                a_loss
+                + self.critic_coef * c_loss
+                - self.entropy_coef * entropy
+                + self.bounds_loss_coef * b_loss
+                + self._disc_coef * disc_loss
+            )
 
-        a_info["actor_loss"] = a_loss
-        a_info["actor_clip_frac"] = a_clip_frac
-        c_info["critic_loss"] = c_loss
+            a_info["actor_loss"] = a_loss
+            a_info["actor_clip_frac"] = a_clip_frac
+            c_info["critic_loss"] = c_loss
 
-        # Update the model
-        self.optimizer.zero_grad()
-        loss.backward()
+            # MATCH xcxc debug -- loss calculation (no rlg)
+            print("a loss", a_loss.sum())
+            print("a_clip_frac", a_clip_frac.sum())
+            # print("c loss", c_loss.sum())
+            # print("b loss", b_loss.sum())
+
+            self.optimizer.zero_grad()
+
+        self.scaler.scale(loss).backward()
+
+        # Print gradient stats before optimizer step
+        actor_grad_norm = 0
+        for p in self.model.a2c_network.parameters():
+            if p.grad is not None:
+                actor_grad_norm += p.grad.norm().item()
+        print(f"Before clip grad norm: {actor_grad_norm}")
+
         if self.truncate_grads:
+            self.scaler.unscale_(self.optimizer)
             nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_norm)
-        self.optimizer.step()
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+
+        # Print gradient stats before optimizer step
+        actor_grad_norm = 0
+        for p in self.model.a2c_network.parameters():
+            if p.grad is not None:
+                actor_grad_norm += p.grad.norm().item()
+        print(f"After clip grad norm: {actor_grad_norm}")
+
+        # # Update the model, without the scaler
+        # self.optimizer.zero_grad()
+        # loss.backward()
+        # if self.truncate_grads:
+        #     nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_norm)
+        # self.optimizer.step()
 
         with torch.no_grad():
             kl_dist = policy_kl(mu.detach(), sigma.detach(), old_mu_batch, old_sigma_batch)
 
-        # MATCH xcxc debug -- loss backward (no rlg)
-        # print("loss backward", loss.sum())
+        # xcxc debug -- loss backward (no rlg)
+        print("loss backward", loss.sum())
+        print()
 
         self.train_result = {
             "entropy": entropy,

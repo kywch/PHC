@@ -331,9 +331,17 @@ class AMPAgent(common_agent.CommonAgent):
 
             if self.has_central_value:
                 self.experience_buffer.update_data('states', n, self.obs['states'])
-            
+
+            # MATCH xcxc debug -- play steps, get_action_values (rlg)
+            # print(n, ", len dones", len(done_indices))
+            # print("obs", self.obs["obs"].sum())
+            # print("actions", res_dict["actions"].sum())
+
             self.obs, rewards, self.dones, infos = self.env_step(res_dict['actions'])
-                
+            # print("new_obs", self.obs["obs"].sum())
+            # print("rewards", rewards.sum())
+            # print("amp obs", infos["amp_obs"].sum())
+
             shaped_rewards = self.rewards_shaper(rewards)
             self.experience_buffer.update_data('rewards', n, shaped_rewards)
             self.experience_buffer.update_data('next_obses', n, self.obs['obs'])
@@ -368,7 +376,7 @@ class AMPAgent(common_agent.CommonAgent):
             self.current_rewards = self.current_rewards * not_dones.unsqueeze(1)
             self.current_lengths = self.current_lengths * not_dones
 
-            if (self.vec_env.env.task.viewer):
+            if True or (self.vec_env.env.task.viewer):
                 self._amp_debug(infos)
 
             done_indices = done_indices[:, 0]
@@ -408,6 +416,13 @@ class AMPAgent(common_agent.CommonAgent):
         self.dataset.update_values_dict(dataset_dict, rnn_format = True, horizon_length = self.horizon_length, num_envs = self.num_actors)
         # self.dataset.update_values_dict(dataset_dict)
 
+        # xcxc debug -- prepare dataset (no rlg)
+        # for k, v in dataset_dict.items():
+        #     try:
+        #         print(k, v.sum())
+        #     except:
+        #         pass
+
         return
 
     def train_epoch(self):
@@ -435,6 +450,17 @@ class AMPAgent(common_agent.CommonAgent):
             batch_dict['amp_obs_replay'] = batch_dict['amp_obs']
         else:
             batch_dict['amp_obs_replay'] = self._amp_replay_buffer.sample(num_obs_samples)['amp_obs']
+
+        # MATCH xcxc debug -- amp obs buffers (rlg)
+        # print()
+        # print("returns", batch_dict["returns"].sum())
+        # print("amp_obs_demo", amp_obs_demo.sum())
+        # print("amp_obs_replay", batch_dict['amp_obs_replay'].sum())
+        # print()
+
+        # # Pickle the batch dict
+        # with open("batch_dict_test.pkl", "wb") as f:
+        #     pickle.dump(batch_dict, f)
 
         self.set_train()
 
@@ -500,7 +526,15 @@ class AMPAgent(common_agent.CommonAgent):
         train_info['returns'] = batch_dict['returns']
         self._record_train_batch_info(batch_dict, train_info)
         self.post_epoch(self.epoch_num)
-        
+
+        # MATCH xcxc debug -- train epoch (rlg)
+        # for k in ["kl", "entropy", "actor_loss", "critic_loss", "b_loss", "disc_loss", "disc_agent_logit", "disc_rewards"]:
+        for k in ["kl"]:
+            if isinstance(train_info[k], list):
+                print(k, torch.stack(train_info[k]).sum())
+            else:
+                print(k, train_info[k].sum())
+
         return train_info
 
     def pre_epoch(self, epoch_num):
@@ -647,6 +681,12 @@ class AMPAgent(common_agent.CommonAgent):
             a_info['actor_clip_frac'] = a_clip_frac
             c_info['critic_loss'] = c_loss
 
+            # MATCH xcxc debug -- loss calculation (rlg)
+            print("a loss", a_loss.sum())
+            print("a_clip_frac", a_clip_frac.sum())
+            # print("c loss", c_loss.sum())
+            # print("b loss", b_loss.sum())
+
             if self.multi_gpu:
                 self.optimizer.zero_grad()
             else:
@@ -660,8 +700,14 @@ class AMPAgent(common_agent.CommonAgent):
             kl_dist = torch_ext.policy_kl(mu.detach(), sigma.detach(), old_mu_batch, old_sigma_batch, reduce_kl)
             if self.is_rnn:
                 kl_dist = kl_dist.mean()
-        
-                
+
+        # Print gradient stats before optimizer step
+        actor_grad_norm = 0
+        for p in self.model.a2c_network.parameters():
+            if p.grad is not None:
+                actor_grad_norm += p.grad.norm().item()
+        print(f"Before clip grad norm: {actor_grad_norm}")
+
         #TODO: Refactor this ugliest code of the year
         if self.truncate_grads:
             if self.multi_gpu:
@@ -674,12 +720,24 @@ class AMPAgent(common_agent.CommonAgent):
             else:
                 self.scaler.unscale_(self.optimizer)
                 nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_norm)
+
+                # xcxc Print gradient stats before optimizer step
+                actor_grad_norm = 0
+                for p in self.model.a2c_network.parameters():
+                    if p.grad is not None:
+                        actor_grad_norm += p.grad.norm().item()
+                print(f"After clip grad norm: {actor_grad_norm}")
+
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
         else:
             self.scaler.step(self.optimizer)
             self.scaler.update()
-          
+
+        # MATCH xcxc debug -- loss backward (rlg)
+        print("loss backward", loss.sum())
+        print()
+
         self.train_result.update( {'entropy': entropy, 'kl': kl_dist, 'last_lr': self.last_lr, 'lr_mul': lr_mul, 'b_loss': b_loss})
         self.train_result.update(a_info)
         self.train_result.update(c_info)

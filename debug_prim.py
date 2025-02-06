@@ -70,8 +70,9 @@ def rebuild_model(agent, device):
 
 # Replace rlgames' torch_runner and factories
 class Runner:
-    def __init__(self, env_creator, algo_observer=None):
+    def __init__(self, env_creator, run_rlg=False, algo_observer=None):
         self.env_creator = env_creator
+        self.run_rlg = run_rlg
         self.algo_observer = algo_observer
         # torch.backends.cudnn.benchmark = True  # make non-deterministic
 
@@ -131,7 +132,7 @@ class Runner:
             raise ValueError(f"Unknown command: {args}")
 
     def create_player(self):
-        if RUN_RLG:
+        if self.run_rlg:
             return rlg_players.IMAMPPlayerContinuous(self.config)
         else:
             return PHCAgent(self.config, self.env_creator)
@@ -141,7 +142,7 @@ class Runner:
             self.algo_observer = DefaultAlgoObserver()
         self.config["algo_observer"] = self.algo_observer
 
-        if RUN_RLG:
+        if self.run_rlg:
             self.config["features"] = {"observer": self.algo_observer}
             agent = rlg_agent.IMAmpAgent(base_name="run", config=self.config)
 
@@ -276,7 +277,9 @@ def main(cfg_hydra: DictConfig) -> None:
             wandb.run.name = cfg.exp_name
             wandb.run.save()
 
-    runner = Runner(env_creator)
+    run_rlg = cfg.get("run_rlg") or RUN_RLG
+    
+    runner = Runner(env_creator, run_rlg)
     runner.load(cfg_train)
     runner.run(cfg)
 
@@ -292,11 +295,14 @@ TRAIN_SINGLE_PRIM = [
     # "env.motion_file=sample_data/amass_isaac_standing_upright_slim.pkl",
     "env.motion_file=sample_data/amass_train_take6_upright.pkl",
     "env.num_envs=32",
-    "learning.params.config.horizon_length=4",
-    "learning.params.config.minibatch_size=128",
-    "learning.params.config.amp_minibatch_size=128",
+    "learning.params.config.horizon_length=32",
+    "learning.params.config.minibatch_size=1024",
+    "learning.params.config.amp_minibatch_size=1024",
+    # "learning.params.config.horizon_length=4",
+    # "learning.params.config.minibatch_size=128",
+    # "learning.params.config.amp_minibatch_size=128",
     # "learning.params.config.save_frequency=3",
-    # "device=cpu",
+    "device=cpu",
 ]
 
 EVALUATE_SINGLE_PRIM = [
@@ -318,7 +324,7 @@ if __name__ == "__main__":
 
     import sys
 
-    if len(sys.argv) == 1:
+    if len(sys.argv) < 3:
         sys.argv.extend(kwargs)
 
     main()

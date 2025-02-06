@@ -32,7 +32,6 @@ train: True
 collect_dataset: False
 disable_multiprocessing: True
 
-
 ####### Testing Configs. ########
 server_mode: False
 has_eval: True
@@ -42,6 +41,7 @@ debug: False
 follow: False
 add_proj: False
 real_traj: False
+run_rlg: False
 
 hydra:
   job:

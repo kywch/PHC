@@ -57,7 +57,7 @@ class AMPBuilder:
                 nn.SiLU(),
             )
             self.mu = nn.Linear(hidden_output_dim, actions_num)
-            self.mu_act = nn.Identity()  # Remove this
+            # self.mu_act = nn.Identity()  # Remove this
 
             # NOTE: These config are redundant. Make sure they match,
             assert self.space_config["fixed_sigma"] != self.space_config["learn_sigma"]
@@ -169,6 +169,9 @@ class ModelAMPContinuous:
 
             # xcxc debug -- forward (both)
             # print()
+            if prev_actions is not None:
+                print("prev_actions", prev_actions.sum())
+                print("mu", mu.sum())
             # print("mu", mu.sum())
             # print("logstd", logstd.sum())
             # print("value", value.sum())
