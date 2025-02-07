@@ -12,8 +12,7 @@ from easydict import EasyDict
 
 from smpl_sim.smpllib.smpl_joint_names import SMPL_MUJOCO_NAMES
 
-# TODO: remove flags
-from phc import PHC_ROOT, flags
+from phc import PHC_ROOT
 from phc.pufferl.poselib_skeleton import SkeletonTree
 from phc.pufferl.motion_lib import MotionLibSMPL, FixHeightMode
 from phc.pufferl.torch_utils import (
@@ -191,7 +190,13 @@ class HumanoidPHC:
         self._setup_gym_tensors()
         self._setup_env_buffers()
 
+        ### Flags
+        # NOTE: These are to replace flags.
+        self.flag_test = False
+        self.flag_im_eval = False
+
         ### Motion data
+        # NOTE: self.flag_im_eval is used in _load_motion
         self._load_motion(self.motion_file)
 
         # TODO: Remove these. Used by rl-games
@@ -290,8 +295,7 @@ class HumanoidPHC:
         amp_obs_flat = self._amp_obs_buf.view(-1, self.num_amp_obs)
         self.extras["amp_obs"] = amp_obs_flat  ## ZL: hooks for adding amp_obs for trianing
 
-        # TODO: Remove flags.
-        if flags.im_eval:
+        if self.flag_im_eval:
             motion_times = (
                 (self.progress_buf) * self.dt + self._motion_start_times + self._motion_start_times_offset
             )  # already has time + 1, so don't need to + 1 to get the target for "this frame"
@@ -906,7 +910,6 @@ class HumanoidPHC:
         # self.ref_body_pos_subset = torch.zeros_like(self._rigid_body_pos[:, self._track_bodies_id])
         self.ref_dof_pos = torch.zeros_like(self._dof_pos)
 
-    # TODO: Remove flags -- flags.im_eval, flags.test
     def _load_motion(self, motion_train_file, motion_test_file=None):
         motion_lib_cfg = EasyDict(
             {
@@ -915,7 +918,7 @@ class HumanoidPHC:
                 "fix_height": FixHeightMode.full_fix,
                 "min_length": self._min_motion_len,
                 "max_length": -1,
-                "im_eval": flags.im_eval,
+                "im_eval": self.flag_im_eval,
                 "multi_thread": False,  # CHECK ME: need to config?
                 "smpl_type": self.humanoid_type,
                 "randomrize_heading": True,
@@ -933,8 +936,8 @@ class HumanoidPHC:
             skeleton_trees=self.skeleton_trees,
             gender_betas=self.humanoid_shapes.cpu(),
             limb_weights=self.humanoid_limb_and_weights.cpu(),
-            random_sample=(not flags.test) and (not self.seq_motions),
-            max_len=-1 if flags.test else self.max_episode_length,
+            random_sample=(not self.flag_test) and (not self.seq_motions),
+            max_len=-1 if self.flag_test else self.max_episode_length,
             start_idx=self._motion_sample_start_idx,
         )
 
@@ -1130,8 +1133,7 @@ class HumanoidPHC:
         else:
             raise ValueError("Unsupported state initialization strategy: {:s}".format(str(self._state_init)))
 
-        # TODO: Remove flags
-        if flags.test:
+        if self.flag_test:
             motion_times[:] = 0
 
         motion_res = self._get_state_from_motionlib_cache(
@@ -1223,7 +1225,7 @@ class HumanoidPHC:
         task_obs = self._compute_task_obs(env_ids)
         obs = torch.cat([self_obs, task_obs], dim=-1)
 
-        if self.add_obs_noise and not flags.test:
+        if self.add_obs_noise and not self.flag_test:
             obs = obs + torch.randn_like(obs) * 0.1
 
         self.obs_buf[env_ids] = obs
@@ -1540,8 +1542,15 @@ class HumanoidPHC:
             pass_time,
             self._enable_early_termination,
             self._termination_distances[..., self._reset_bodies_id],
-            flags.im_eval,
+            self.flag_im_eval,
         )
+
+    def get_termination_distances(self):
+        return self._termination_distances.clone()
+
+    # NOTE: Training/eval code changes the termination distances.    
+    def set_termination_distances(self, termination_distances):
+        self._termination_distances[:] = termination_distances
 
     def _update_hist_amp_obs(self, env_ids=None):
         if env_ids is None:
@@ -1599,8 +1608,7 @@ class HumanoidPHC:
         return amp_obs_demo
 
     def resample_motions(self):
-        # TODO: Remove flags
-        if flags.test:
+        if self.flag_test:
             self.forward_motion_samples()
 
         else:
@@ -1608,8 +1616,8 @@ class HumanoidPHC:
                 skeleton_trees=self.skeleton_trees,
                 limb_weights=self.humanoid_limb_and_weights.cpu(),
                 gender_betas=self.humanoid_shapes.cpu(),
-                random_sample=(not flags.test) and (not self.seq_motions),
-                max_len=-1 if flags.test else self.max_episode_length,
+                random_sample=(not self.flag_test) and (not self.seq_motions),
+                max_len=-1 if self.flag_test else self.max_episode_length,
             )
 
             time = self.progress_buf * self.dt + self._motion_start_times + self._motion_start_times_offset
@@ -1644,6 +1652,14 @@ class HumanoidPHC:
     @property
     def start_idx(self):
         return self._motion_sample_start_idx
+
+    #####################################################################
+    ### prepare for evaluation
+    #####################################################################
+
+
+
+
 
 
 #####################################################################
