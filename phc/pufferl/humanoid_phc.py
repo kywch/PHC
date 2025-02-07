@@ -455,6 +455,8 @@ class HumanoidPHC:
         self._enable_early_termination = True
         termination_distance = 0.25  # env_config.get("terminationDistance", 0.5)
         self._termination_distances = to_torch(np.array([termination_distance] * self.num_bodies), device=self.device)
+        # NOTE: _termination_distances is changed between train/eval, so keep a backup
+        self._termination_distances_backup = self._termination_distances.clone()
 
         self.env_spacing = env_config.get("env_spacing", 5)
         # NOTE: Related to inter-group collision. If False, there is no inter-env collision. See self._build_env()
@@ -479,6 +481,8 @@ class HumanoidPHC:
 
         self._reset_bodies = env_config.get("reset_bodies", self._track_bodies)
         self._reset_bodies_id = self._build_body_ids_tensor(self._reset_bodies)
+        # NOTE: reset_bodies_id is changed between train/eval, so keep a backup
+        self._reset_bodies_id_backup = self._reset_bodies_id
 
         # Used in https://github.com/kywch/PHC/blob/pixi/phc/learning/im_amp.py#L181. Check how it is used.
         self._eval_bodies = self._body_names.copy()
@@ -1545,9 +1549,6 @@ class HumanoidPHC:
             self.flag_im_eval,
         )
 
-    def get_termination_distances(self):
-        return self._termination_distances.clone()
-
     # NOTE: Training/eval code changes the termination distances.    
     def set_termination_distances(self, termination_distances):
         self._termination_distances[:] = termination_distances
@@ -1648,18 +1649,64 @@ class HumanoidPHC:
         )
         self.reset()
 
+    @property
+    def num_unique_motions(self):
+        return self._motion_lib._num_unique_motions
+
+    @property
+    def current_motion_ids(self):
+        return self._motion_lib._curr_motion_ids
+
+    @property
+    def motion_sample_start_idx(self):
+        return self._motion_sample_start_idx
+
+    @property
+    def motion_data_keys(self):
+        return self._motion_lib._motion_data_keys
+
+    def get_motion_steps(self):
+        return self._motion_lib.get_motion_num_steps()
+
     # TODO: Remove this. Used by rl-games
     @property
     def start_idx(self):
         return self._motion_sample_start_idx
 
     #####################################################################
-    ### prepare for evaluation
+    ### Toggle train/eval model. Used in the training/eval code
     #####################################################################
+    def toggle_eval_mode(self):
+        self.flag_test = True
+        self.flag_im_eval = True
 
+        # Relax the early termination condition for evaluation
+        self.set_termination_distances(0.5)  # NOTE: hardcoded
 
+        self._motion_lib = self._motion_eval_lib
+        self.begin_seq_motion_samples()  # using _motion_eval_lib
+        if len(self._reset_bodies_id) > 15:
+            # Following UHC. Only do it for full body, not for three point/two point trackings.
+            self._reset_bodies_id = self._eval_track_bodies_id
 
+        # Return the number of motions
+        return self._motion_lib._num_unique_motions
 
+    def untoggle_eval_mode(self, failed_keys):
+        self.flag_test = False
+        self.flag_im_eval = False
+
+        self.set_termination_distances(self._termination_distances_backup)
+        self._motion_lib = self._motion_train_lib
+        self._reset_bodies_id = self._reset_bodies_id_backup
+
+        if self.auto_pmcp:
+            self._motion_lib.update_hard_sampling_weight(failed_keys)
+        elif self.auto_pmcp_soft:
+            self._motion_lib.update_soft_sampling_weight(failed_keys)
+
+        # Return the motion lib termination history
+        return self._motion_lib._termination_history.clone()
 
 
 #####################################################################

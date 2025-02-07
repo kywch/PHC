@@ -1,4 +1,5 @@
 import os
+import gc
 import time
 import shutil
 from copy import deepcopy
@@ -10,8 +11,11 @@ from torch import nn
 from torch import optim
 
 import wandb
+import joblib
 from tqdm import tqdm
 from tensorboardX import SummaryWriter
+
+from smpl_sim.smpllib.smpl_eval import compute_metrics_lite
 
 from phc.norlg_learning.utils import RunningMeanStd, AMPDataset, AverageMeter, ExperienceBuffer, ReplayBuffer
 
@@ -504,7 +508,7 @@ class PHCAgent:
             # self.running_mean_std_temp.freeze()
 
             # MATCH xcxc debug -- train epoch (norlg)
-            #for k in ["kl", "entropy", "actor_loss", "critic_loss", "b_loss", "disc_loss", "disc_agent_logit", "disc_rewards"]:
+            # for k in ["kl", "entropy", "actor_loss", "critic_loss", "b_loss", "disc_loss", "disc_agent_logit", "disc_rewards"]:
             # for k in ["kl"]:
             #     if isinstance(train_info[k], list):
             #         print(k, torch.stack(train_info[k]).sum())
@@ -847,7 +851,7 @@ class PHCAgent:
             "amp_obs_replay": amp_obs_replay,
             "amp_obs_demo": amp_obs_demo,
         }
-        
+
         res_dict = self.model(batch_dict)
 
         # Calculate loss
@@ -1027,7 +1031,179 @@ class PHCAgent:
         return agent_acc, demo_acc
 
     def evaluate_model(self):
-        pass
+        print("\n############################ Evaluation ############################")
+        self.set_eval()
+
+        self.terminate_state = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self.terminate_memory = []
+        self.mpjpe, self.mpjpe_all = [], []
+        self.gt_pos, self.gt_pos_all = [], []
+        self.pred_pos, self.pred_pos_all = [], []
+        self.curr_steps = 0
+        self.success_rate = 0
+
+        ### Setup the task_env for evaluation
+        num_unique_motions = self.task_env.toggle_eval_mode()
+        self.pbar = tqdm(range(num_unique_motions // self.num_envs))
+        self.pbar.set_description("")
+
+        self.print_stats = False
+        self.env_reset()
+
+        ### Rollout
+        cr = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
+        steps = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
+        done_indices = []
+
+        while True:
+            obs_torch = self.env_reset(done_indices)
+
+            action = self.get_action(obs_torch, is_determenistic=True)
+
+            """Stepping the environment"""
+            with torch.no_grad():
+                obs_torch, r, done, info = self.env.step(action)
+
+            cr += r
+            steps += 1
+
+            # Calculate the metrics for each step
+            done, info = self._post_step_eval(done, info)
+
+            all_done_indices = done.nonzero(as_tuple=False)
+            done_indices = all_done_indices[:: self.num_agents].flatten()
+
+            if info["eval_done"]:
+                break
+
+        ### Set the task_env back to train mode
+        termination_history = self.task_env.untoggle_eval_mode(info["failed_keys"])
+        self.print_stats = True
+        self.env_reset()
+
+        torch.cuda.empty_cache()
+        gc.collect()
+        del self.terminate_state, self.terminate_memory, self.mpjpe, self.mpjpe_all
+
+        joblib.dump(
+            {
+                "failed_keys": info["failed_keys"],
+                "termination_history": termination_history,
+            },
+            os.path.join(self.network_path, f"failed_{self.epoch_num:010d}.pkl"),
+        )
+        return info["eval_info"]
+
+    def _post_step_eval(self, done, info):
+        num_unique_motions = self.task_env.num_unique_motions
+        motion_num_steps = self.task_env.get_motion_steps()
+
+        # If terminate after the last frame, then it is not a termination. curr_step is one step behind simulation.
+        termination_state = torch.logical_and(self.curr_steps <= motion_num_steps - 1, info["terminate"])
+        self.terminate_state = torch.logical_or(termination_state, self.terminate_state)
+        if (~self.terminate_state).sum() > 0:
+            max_possible_id = num_unique_motions - 1
+            curr_ids = self.task_env.current_motion_ids
+            if (max_possible_id == curr_ids).sum() > 0:
+                bound = (max_possible_id == curr_ids).nonzero()[0] + 1
+                if (~self.terminate_state[:bound]).sum() > 0:
+                    curr_max = motion_num_steps[:bound][~self.terminate_state[:bound]].max()
+                else:
+                    curr_max = self.curr_steps - 1  # the ones that should be counted have terminated
+            else:
+                curr_max = motion_num_steps[~self.terminate_state].max()
+
+            if self.curr_steps >= curr_max:
+                curr_max = self.curr_steps + 1  # For matching up the current steps and max steps.
+        else:
+            curr_max = motion_num_steps.max()
+
+        self.mpjpe.append(info["mpjpe"])
+        self.gt_pos.append(info["body_pos_gt"])
+        self.pred_pos.append(info["body_pos"])
+        self.curr_steps += 1
+
+        if self.curr_steps >= curr_max or self.terminate_state.sum() == self.num_envs:
+            self.curr_steps = 0
+            self.terminate_memory.append(self.terminate_state.cpu().numpy())
+            self.success_rate = 1 - np.concatenate(self.terminate_memory)[:num_unique_motions].mean()
+
+            # MPJPE
+            all_mpjpe = torch.stack(self.mpjpe)
+            # Max should be the same as the number of frames in the motion.
+            assert all_mpjpe.shape[0] == curr_max or self.terminate_state.sum() == self.num_envs
+
+            all_mpjpe = [all_mpjpe[: (i - 1), idx].mean() for idx, i in enumerate(motion_num_steps)]
+            all_body_pos_pred = np.stack(self.pred_pos)
+            all_body_pos_pred = [all_body_pos_pred[: (i - 1), idx] for idx, i in enumerate(motion_num_steps)]
+            all_body_pos_gt = np.stack(self.gt_pos)
+            all_body_pos_gt = [all_body_pos_gt[: (i - 1), idx] for idx, i in enumerate(motion_num_steps)]
+
+            self.mpjpe_all.append(all_mpjpe)
+            self.pred_pos_all += all_body_pos_pred
+            self.gt_pos_all += all_body_pos_gt
+
+            if self.task_env.motion_sample_start_idx + self.num_envs >= num_unique_motions:
+                self.pbar.clear()
+                terminate_hist = np.concatenate(self.terminate_memory)
+                succ_idxes = np.flatnonzero(~terminate_hist[:num_unique_motions]).tolist()
+
+                pred_pos_all_succ = [(self.pred_pos_all[:num_unique_motions])[i] for i in succ_idxes]
+                gt_pos_all_succ = [(self.gt_pos_all[:num_unique_motions])[i] for i in succ_idxes]
+
+                pred_pos_all = self.pred_pos_all[:num_unique_motions]
+                gt_pos_all = self.gt_pos_all[:num_unique_motions]
+
+                failed_keys = self.task_env.motion_data_keys[terminate_hist[:num_unique_motions]]
+                success_keys = self.task_env.motion_data_keys[~terminate_hist[:num_unique_motions]]
+
+                metrics_all = compute_metrics_lite(pred_pos_all, gt_pos_all)
+                metrics_succ = compute_metrics_lite(pred_pos_all_succ, gt_pos_all_succ)
+
+                metrics_all_print = {m: np.mean(v) for m, v in metrics_all.items()}
+                metrics_succ_print = {m: np.mean(v) for m, v in metrics_succ.items()}
+
+                if len(metrics_succ_print) == 0:
+                    print("No success!!!")
+                    metrics_succ_print = metrics_all_print
+
+                print("------------------------------------------")
+                print(f"Success Rate: {self.success_rate:.10f}")
+                print("All: ", " \t".join([f"{k}: {v:.3f}" for k, v in metrics_all_print.items()]))
+                print("Succ: ", " \t".join([f"{k}: {v:.3f}" for k, v in metrics_succ_print.items()]))
+                print("Failed keys: ", len(failed_keys), failed_keys)
+
+                eval_info = {
+                    "eval/success_rate": self.success_rate,
+                    "eval/mpjpe_all": metrics_all_print["mpjpe_g"],
+                    "eval/mpjpe_succ": metrics_succ_print["mpjpe_g"],
+                    "eval/accel_dist": metrics_succ_print["accel_dist"],
+                    "eval/vel_dist": metrics_succ_print["vel_dist"],
+                    "eval/mpjpel_all": metrics_all_print["mpjpe_l"],
+                    "eval/mpjpel_succ": metrics_succ_print["mpjpe_l"],
+                    "eval/mpjpe_pa": metrics_succ_print["mpjpe_pa"],
+                }
+                return done, {
+                    "eval_done": True,
+                    "eval_info": eval_info,
+                    "failed_keys": failed_keys,
+                    "success_keys": success_keys,
+                }
+
+            # Modify done such that games will exit and reset.
+            done[:] = 1
+
+            self.task_env.forward_motion_samples()
+            self.terminate_state[:] = False
+
+            self.pbar.update(1)
+            self.pbar.refresh()
+            self.mpjpe, self.gt_pos, self.pred_pos = [], [], []
+
+        update_str = f"Terminated: {self.terminate_state.sum().item()} | max frames: {curr_max} | steps {self.curr_steps} | Start: {self.task_env.motion_sample_start_idx} | Succ rate: {self.success_rate:.3f} | Mpjpe: {np.mean(self.mpjpe_all) * 1000:.3f}"
+        self.pbar.set_description(update_str)
+
+        return done, {"eval_done": False, "eval_info": {}, "failed_keys": [], "success_keys": []}
 
     def save(self, file_path):
         print("=> saving checkpoint '{}'".format(file_path))
