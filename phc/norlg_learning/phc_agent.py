@@ -269,9 +269,6 @@ class PHCAgent:
         self.num_actors = self.config["num_actors"]
         self.algo_observer = self.config.get("algo_observer", None)
 
-        # Using default reward shaper, which does not do anything
-        self.rewards_shaper = self.config["reward_shaper"]  # CHECK ME
-
         self.network_path = self.config.get("network_path", "./nn/")
         self.log_path = self.config.get("log_path", "runs/")
 
@@ -384,7 +381,8 @@ class PHCAgent:
             self.epoch_num += 1
 
             ### pre_epoch
-            if (self.epoch_num + 1) % self.task_env.motion_resampling_interval == 0:
+            # NOTE: motions are resampled at epochs 501, 1001, 1501, ... The eval is done at epoch 1500, 3000, ...
+            if self.epoch_num > 2 and self.epoch_num % self.task_env.motion_resampling_interval == 1:
                 self.task_env.resample_motions()
 
             # Freeze running mean/std, so that the actor does not use the updated mean/std
@@ -588,15 +586,9 @@ class PHCAgent:
                 train_info_dict["rewards/ang_vel"] = reward_raw[3]
                 train_info_dict["rewards/power"] = reward_raw[4]
 
-            for k, v in train_info_dict.items():
-                self.writer.add_scalar(k, v, self.epoch_num)
-
-            if wandb.run is not None:
-                wandb.log(train_info_dict, step=self.epoch_num)
-
             # self.algo_observer.after_print_stats(frame, epoch_num, total_time)
 
-            # save the checkpoint
+            # Save the checkpoint and evaluate the model
             if self.save_freq > 0:
                 if self.epoch_num % self.save_freq == 0:
                     self.save(model_output_file)
@@ -606,7 +598,16 @@ class PHCAgent:
                     shutil.copyfile(model_output_file, int_model_output_file)
 
                     # NOTE: The original code runs eval on every save_freq (1500) epochs
-                    self.evaluate_model()
+                    # Motions are resampled at epochs 501, 1001, 1501, ...
+                    eval_info = self.evaluate_model()
+                    train_info_dict.update(eval_info)
+
+            # Log to wandb
+            for k, v in train_info_dict.items():
+                self.writer.add_scalar(k, v, self.epoch_num)
+
+            if wandb.run is not None:
+                wandb.log(train_info_dict, step=self.epoch_num)
 
             if self.epoch_num > self.max_epochs:
                 self.save(model_output_file)
@@ -679,10 +680,6 @@ class PHCAgent:
 
             if self.value_size == 1:
                 rewards = rewards.unsqueeze(1)
-
-            # No special reward shaping used. Remove.
-            # shaped_rewards = self.rewards_shaper(rewards)
-            # shaped_rewards = rewards  # shape error
 
             self.experience_buffer.update_data("rewards", n, rewards)
             self.experience_buffer.update_data("next_obses", n, self.obs)

@@ -53,7 +53,6 @@ from phc import BODY_MODEL_DIR
 from phc.pufferl.poselib_skeleton import SkeletonMotion, SkeletonState
 from phc.pufferl import torch_utils
 
-IS_DETERMINISTIC = True
 USE_CACHE = False
 # print("MOVING MOTION DATA TO GPU, USING CACHE:", USE_CACHE)
 
@@ -273,7 +272,7 @@ class MotionLibBase:
         self.num_joints = len(skeleton_trees[0].node_names)
         num_motion_to_load = len(skeleton_trees)
 
-        if not IS_DETERMINISTIC and random_sample:
+        if not self.m_cfg.is_deterministic and random_sample:
             sample_idxes = torch.multinomial(self._sampling_prob, num_samples=num_motion_to_load, replacement=True).to(
                 self._device
             )
@@ -721,8 +720,8 @@ class MotionLibSMPL(MotionLibBase):
         # ZL: loading motion with the specified skeleton. Perfoming forward kinematics to get the joint positions
         max_len = config.max_length
         fix_height = config.fix_height
-        if not IS_DETERMINISTIC:
-            np.random.seed(np.random.randint(5000) * pid)
+        # TODO: make it's own random number generator?
+        # np.random.seed(np.random.randint(5000) * pid)
         res = {}
         assert len(ids) == len(motion_data_list)
 
@@ -743,7 +742,7 @@ class MotionLibSMPL(MotionLibBase):
             if max_len == -1 or seq_len < max_len:
                 start, end = 0, seq_len
             else:
-                start = 0 if IS_DETERMINISTIC else random.randint(0, seq_len - max_len)
+                start = 0 if config.is_deterministic else random.randint(0, seq_len - max_len)
                 end = start + max_len
 
             trans = curr_file["root_trans_offset"].clone()[start:end]
@@ -754,7 +753,7 @@ class MotionLibSMPL(MotionLibBase):
             B, J, N = pose_quat_global.shape
 
             ##### ZL: randomize the heading ######
-            if not IS_DETERMINISTIC:
+            if not config.is_deterministic:
                 random_rot = np.zeros(3)
                 random_rot[2] = np.pi * (2 * np.random.random() - 1.0)
                 random_heading_rot = sRot.from_euler("xyz", random_rot)

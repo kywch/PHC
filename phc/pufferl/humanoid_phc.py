@@ -194,6 +194,7 @@ class HumanoidPHC:
         # NOTE: These are to replace flags.
         self.flag_test = False
         self.flag_im_eval = False
+        self.flag_debug = (self.device == "cpu")  # CHECK ME
 
         ### Motion data
         # NOTE: self.flag_im_eval is used in _load_motion
@@ -927,6 +928,7 @@ class HumanoidPHC:
                 "smpl_type": self.humanoid_type,
                 "randomrize_heading": True,
                 "step_dt": self.dt,
+                "is_deterministic": self.flag_debug,
             }
         )
         self._motion_train_lib = MotionLibSMPL(motion_lib_cfg)
