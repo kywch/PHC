@@ -16,7 +16,7 @@ from phc.norlg_learning.network import AMPBuilder, ModelAMPContinuous
 
 from debug_prim import seed_everything
 
-RUN_EVAL = True
+RUN_EVAL = False
 
 
 def set_np_formatting():
@@ -154,14 +154,14 @@ TRAIN_SINGLE_PRIM = [
     "robot=smpl_humanoid",
     # "env.motion_file=sample_data/amass_isaac_standing_upright_slim.pkl",
     "env.motion_file=sample_data/amass_train_take6_upright.pkl",
-    "env.num_envs=32",
-    "learning.params.config.horizon_length=32",
-    "learning.params.config.minibatch_size=1024",
-    "learning.params.config.amp_minibatch_size=1024",
+    # "env.num_envs=32",
+    # "learning.params.config.horizon_length=32",
+    # "learning.params.config.minibatch_size=1024",
+    # "learning.params.config.amp_minibatch_size=1024",
     # "learning.params.config.horizon_length=4",
     # "learning.params.config.minibatch_size=128",
     # "learning.params.config.amp_minibatch_size=128",
-    "learning.params.config.save_frequency=100",
+    # "learning.params.config.save_frequency=100",
     # "device=cpu",
 ]
 
