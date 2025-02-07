@@ -194,7 +194,7 @@ class HumanoidPHC:
         # NOTE: These are to replace flags.
         self.flag_test = False
         self.flag_im_eval = False
-        self.flag_debug = (self.device == "cpu")  # CHECK ME
+        self.flag_debug = self.device == "cpu"  # CHECK ME
 
         ### Motion data
         # NOTE: self.flag_im_eval is used in _load_motion
@@ -219,42 +219,15 @@ class HumanoidPHC:
         return self.obs_buf
 
     def step(self, actions):
-        # Apply actions
-        self.pre_physics_step(actions)
-
-        self._physics_step()
-
-        # Compute observations, rewards, resets, ...
-        self.post_physics_step()
-
-        # obs, reward, done, info
-        return self.obs_buf, self.rew_buf, self.reset_buf, self.extras
-
-    def pre_physics_step(self, actions):
-        self.actions = actions.to(self.device).clone()
-
-        if self.collect_dataset:
-            self.clean_actions = actions.to(self.device).clone()
-
-            if self.add_action_noise:
-                noise = torch.normal(
-                    mean=0.0,
-                    std=float(self.action_noise_std),
-                    size=actions.shape,
-                    device=self.device,
-                )
-                self.actions += noise
-
-        if len(self.actions.shape) == 1:
-            self.actions = self.actions[None,]
-
+        ### Apply actions, which was self.pre_physics_step(actions)
         if self.reduce_action:
+            # NOTE: not using it now. We don't have to create a new tensor every time?
             actions_full = torch.zeros([actions.shape[0], self.num_dof]).to(self.device)
-            actions_full[:, self.reduced_action_idx] = self.actions
+            actions_full[:, self.reduced_action_idx] = actions
             pd_tar = self._action_to_pd_targets(actions_full)
 
         else:
-            pd_tar = self._action_to_pd_targets(self.actions)
+            pd_tar = self._action_to_pd_targets(actions)
             if self._freeze_hand:
                 pd_tar[
                     :,
@@ -271,19 +244,23 @@ class HumanoidPHC:
         pd_tar_tensor = gymtorch.unwrap_tensor(pd_tar)
         self.gym.set_dof_position_target_tensor(self.sim, pd_tar_tensor)
 
-    def _physics_step(self):
+        ### self._physics_step()
         for _ in range(self.control_freq_inv):
             self.gym.simulate(self.sim)
 
         self.gym.fetch_results(self.sim, True)
 
-    def post_physics_step(self):
+        ### Compute observations, rewards, resets, which was self.post_physics_step()
         # This is after stepping, so progress buffer got + 1. Compute reset/reward do not need to forward 1 timestep since they are for "this" frame now.
         self.progress_buf += 1
 
         self._refresh_sim_tensors()
-        self._compute_reward()  # ZL swapped order of reward & objecation computes. should be fine.
+        self._compute_reward()
+
+        # NOTE: Which envs must be reset is computed here, but the envs get reset outside the env
         self._compute_reset()
+
+        # TODO: Move the code for resetting the env here?
 
         self._compute_observations()  # observation for the next step.
 
@@ -308,14 +285,8 @@ class HumanoidPHC:
             self.extras["body_pos"] = body_pos.cpu().numpy()
             self.extras["body_pos_gt"] = motion_res["rg_pos"].cpu().numpy()
 
-            ### Dumping dataset
-            if self.collect_dataset:
-                self.extras["obs_buf"] = self.obs_buf_t.copy()  # n, 945
-                self.extras["actions"] = self.actions.cpu().numpy()  # n, 69
-                self.extras["clean_actions"] = self.clean_actions.cpu().numpy()
-                self.extras["reset_buf"] = self.reset_buf.cpu().numpy()  # n
-
-                self.obs_buf_t = self.obs_buf.cpu().numpy()  # update to next time step
+        # obs, reward, done, info
+        return self.obs_buf, self.rew_buf, self.reset_buf, self.extras
 
     def render(self):
         if self.viewer:
@@ -566,6 +537,7 @@ class HumanoidPHC:
 
     def _create_envs(self):
         self.envs = []
+        self.env_origins = []
         self.humanoid_handles = []
         self.humanoid_masses = []
         self.humanoid_limb_and_weights = []
@@ -593,6 +565,11 @@ class HumanoidPHC:
 
             self.gym.end_aggregate(env_ptr)
             self.envs.append(env_ptr)
+
+            # Save the env origins for the camera work (render_env)
+            row = i // num_per_row
+            col = i % num_per_row
+            self.env_origins.append((col * 2 * self.env_spacing, row * 2 * self.env_spacing, 0.0))
 
         # NOTE: self.humanoid_limb_and_weights comes from self._build_env()
         self.humanoid_limb_and_weights = torch.stack(self.humanoid_limb_and_weights).to(self.device)
@@ -962,9 +939,6 @@ class HumanoidPHC:
             self._state_reset_happened = True
 
         self._init_amp_obs(env_ids)
-
-        if self.collect_dataset:
-            self.obs_buf_t = self.obs_buf.cpu().numpy()  # first time step update
 
     def _reset_actors(self, env_ids):
         if self._state_init == StateInit.Default:
@@ -1551,7 +1525,7 @@ class HumanoidPHC:
             self.flag_im_eval,
         )
 
-    # NOTE: Training/eval code changes the termination distances.    
+    # NOTE: Training/eval code changes the termination distances.
     def set_termination_distances(self, termination_distances):
         self._termination_distances[:] = termination_distances
 

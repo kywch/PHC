@@ -15,7 +15,7 @@ import imageio
 import matplotlib
 import matplotlib.pyplot as plt
 
-from phc import PHC_ROOT, flags
+from phc import PHC_ROOT
 from phc.pufferl.humanoid_phc import HumanoidPHC
 from phc.pufferl.torch_utils import to_torch, exp_map_to_quat
 
@@ -32,28 +32,33 @@ def agt_color(aidx):
 
 class HumanoidRenderEnv(HumanoidPHC):
     def __init__(self, cfg, sim_params, physics_engine, device_type, device_id, headless):
-        super().__init__(cfg, sim_params, physics_engine, device_type, device_id, headless)
+        ### Flags like
+        self.flag_server_mode = False
+        self.flag_show_traj = True
+        self.flag_add_proj = False
 
-        self.state_record = defaultdict(list)
-        self.enable_viewer_sync = True
-        self.paused = False
+        super().__init__(cfg, sim_params, physics_engine, device_type, device_id, headless)
 
         # If running with a viewer, set up keyboard shortcuts and camera
         self._create_viewer()
 
         # NOTE: server_mode refers to using webcam or motion generator to get motions to imitate
         # Skipping this for now
-        # if flags.server_mode:
+        # if self.flag_server_mode:
         #     # bgsk = threading.Thread(target=self.setup_video_client, daemon=True).start()
         #     bgsk = threading.Thread(target=self.setup_talk_client, daemon=False).start()
 
-        if self.viewer or flags.server_mode:
+        if self.viewer or self.flag_server_mode:
             self._build_marker_state_tensors()
             self._init_camera()
+            self.change_char_color()
 
-    def _physics_step(self):
-        super()._physics_step()
+        self.state_record = defaultdict(list)
+
+    def step(self, actions):
+        obs, rewards, dones, infos = super().step(actions)
         self.render()
+        return obs, rewards, dones, infos
 
     def render(self):
         if not self.viewer:
@@ -63,7 +68,7 @@ class HumanoidRenderEnv(HumanoidPHC):
         if self.gym.query_viewer_has_closed(self.viewer):
             sys.exit()
 
-        if self.viewer or flags.server_mode:
+        if self.viewer or self.flag_server_mode:
             self._update_camera()
             self._update_marker()
 
@@ -71,10 +76,6 @@ class HumanoidRenderEnv(HumanoidPHC):
         for evt in self.gym.query_viewer_action_events(self.viewer):
             if evt.action == "QUIT" and evt.value > 0:
                 sys.exit()
-            if evt.action == "PAUSE" and evt.value > 0:
-                self.paused = not self.paused
-            elif evt.action == "toggle_viewer_sync" and evt.value > 0:
-                self.enable_viewer_sync = not self.enable_viewer_sync
             elif evt.action == "toggle_video_record" and evt.value > 0:
                 self.recording = not self.recording
                 self.recording_state_change = True
@@ -82,35 +83,16 @@ class HumanoidRenderEnv(HumanoidPHC):
                 self.recording = False
                 self.recording_state_change = False
                 self._video_queue = deque(maxlen=self.max_video_queue_size)
-                self._clear_recorded_states()
+                self.state_record.clear()
             elif evt.action == "reset" and evt.value > 0:
                 self.reset()
-            elif evt.action == "follow" and evt.value > 0:
-                flags.follow = not flags.follow
-            elif evt.action == "fixed" and evt.value > 0:
-                flags.fixed = not flags.fixed
-            elif evt.action == "divide_group" and evt.value > 0:
-                flags.divide_group = not flags.divide_group
             elif evt.action == "print_cam" and evt.value > 0:
                 cam_trans = self.gym.get_viewer_camera_transform(self.viewer, None)
                 cam_pos = np.array([cam_trans.p.x, cam_trans.p.y, cam_trans.p.z])
                 print("Print camera", cam_pos)
-            elif evt.action == "disable_collision_reset" and evt.value > 0:
-                flags.no_collision_check = not flags.no_collision_check
-                print("collision_reset: ", flags.no_collision_check)
-            elif evt.action == "fixed_path" and evt.value > 0:
-                flags.fixed_path = not flags.fixed_path
-                print("fixed_path: ", flags.fixed_path)
-            elif evt.action == "real_path" and evt.value > 0:
-                flags.real_path = not flags.real_path
-                print("real_path: ", flags.real_path)
             elif evt.action == "show_traj" and evt.value > 0:
-                flags.show_traj = not flags.show_traj
-                print("show_traj: ", flags.show_traj)
-            elif evt.action == "trigger_input" and evt.value > 0:
-                flags.trigger_input = not flags.trigger_input
-                self.change_char_color()
-                print("show_traj: ", flags.show_traj)
+                self.flag_show_traj = not self.flag_show_traj
+                print("show_traj: ", self.flag_show_traj)
             elif evt.action == "show_progress" and evt.value > 0:
                 print("Progress ", self.progress_buf)
             elif evt.action == "apply_force" and evt.value > 0:
@@ -129,26 +111,21 @@ class HumanoidRenderEnv(HumanoidPHC):
                 )
             elif evt.action == "prev_env" and evt.value > 0:
                 self.viewing_env_idx = (self.viewing_env_idx - 1) % self.num_envs
-                flags.idx -= 1
                 # self.recorder_camera_handle = self.recorder_camera_handles[self.viewing_env_idx]
-                print("\nShowing env: ", self.viewing_env_idx, flags.idx)
+                print("\nShowing env: ", self.viewing_env_idx)
             elif evt.action == "next_env" and evt.value > 0:
                 self.viewing_env_idx = (self.viewing_env_idx + 1) % self.num_envs
-                flags.idx += 1
                 # self.recorder_camera_handle = self.recorder_camera_handles[self.viewing_env_idx]
-                print("\nShowing env: ", self.viewing_env_idx, flags.idx)
+                print("\nShowing env: ", self.viewing_env_idx)
             elif evt.action == "resample_motion" and evt.value > 0:
                 self.resample_motions()
-            elif evt.action == "slow_traj" and evt.value > 0:
-                flags.slow = not flags.slow
-                print("slow_traj: ", flags.slow)
             elif evt.action == "change_color" and evt.value > 0:
                 self.change_char_color()
                 print("Change character color")
 
         if self.recording_state_change:
             if not self.recording:
-                if not flags.server_mode:
+                if not self.flag_server_mode:
                     self.writer.close()
                     del self.writer
 
@@ -159,7 +136,7 @@ class HumanoidRenderEnv(HumanoidPHC):
             self.recording_state_change = False
 
         if self.recording:
-            if not flags.server_mode:
+            if not self.flag_server_mode:
                 self.gym.render_all_camera_sensors(self.sim)
                 color_image = self.gym.get_camera_image(
                     self.sim,
@@ -180,18 +157,9 @@ class HumanoidRenderEnv(HumanoidPHC):
 
             self._record_states()
 
-        # fetch results
-        if self.device != "cpu":
-            self.gym.fetch_results(self.sim, True)
-
         # step graphics
-        if self.enable_viewer_sync:
-            self.gym.step_graphics(self.sim)
-            self.gym.draw_viewer(self.viewer, self.sim, True)
-            # self.gym.sync_frame_time(self.sim)
-
-        else:
-            self.gym.poll_viewer_events(self.viewer)
+        self.gym.step_graphics(self.sim)
+        self.gym.draw_viewer(self.viewer, self.sim, True)
 
     #####################################################################
     ### __init__()
@@ -201,7 +169,6 @@ class HumanoidRenderEnv(HumanoidPHC):
         if self.viewer:
             # subscribe to keyboard shortcuts
             self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_ESCAPE, "QUIT")
-            self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_V, "toggle_viewer_sync")
             self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_L, "toggle_video_record")
             self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_SEMICOLON, "cancel_video_record")
             self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_R, "reset")
@@ -267,11 +234,11 @@ class HumanoidRenderEnv(HumanoidPHC):
             self.gym.viewer_camera_look_at(self.viewer, None, cam_pos, cam_target)
 
     def _create_envs(self):
-        if self.viewer or flags.server_mode:
+        if self.viewer or self.flag_server_mode:
             self._marker_handles = [[] for _ in range(self.num_envs)]
             self._load_marker_asset()
 
-        if flags.add_proj:
+        if self.flag_add_proj:
             self._proj_handles = []
             self._load_proj_asset()
 
@@ -318,10 +285,10 @@ class HumanoidRenderEnv(HumanoidPHC):
     def _build_single_env(self, env_id, env_ptr, humanoid_asset, dof_prop):
         super()._build_single_env(env_id, env_ptr, humanoid_asset, dof_prop)
 
-        if self.viewer or flags.server_mode:
+        if self.viewer or self.flag_server_mode:
             self._build_marker(env_id, env_ptr)
 
-        if flags.add_proj:
+        if self.flag_add_proj:
             self._build_proj(env_id, env_ptr)
 
     def _build_marker(self, env_id, env_ptr):
@@ -398,7 +365,10 @@ class HumanoidRenderEnv(HumanoidPHC):
 
     def _update_camera(self):
         self.gym.refresh_actor_root_state_tensor(self.sim)
-        char_root_pos = self._humanoid_root_states[0, 0:3].cpu().numpy()
+        env_idx = self.viewing_env_idx
+
+        char_root_pos = np.array(self.env_origins[env_idx])
+        char_root_pos += self._humanoid_root_states[env_idx, 0:3].cpu().numpy()
 
         cam_trans = self.gym.get_viewer_camera_transform(self.viewer, None)
 
@@ -408,7 +378,7 @@ class HumanoidRenderEnv(HumanoidPHC):
         new_cam_target = gymapi.Vec3(char_root_pos[0], char_root_pos[1], 1.0)
         new_cam_pos = gymapi.Vec3(char_root_pos[0] + cam_delta[0], char_root_pos[1] + cam_delta[1], cam_pos[2])
 
-        self.gym.set_camera_location(self.recorder_camera_handle, self.envs[0], new_cam_pos, new_cam_target)
+        self.gym.set_camera_location(self.recorder_camera_handle, self.envs[env_idx], new_cam_pos, new_cam_target)
 
         if self.viewer:
             self.gym.viewer_camera_look_at(self.viewer, None, new_cam_pos, new_cam_target)
@@ -416,54 +386,21 @@ class HumanoidRenderEnv(HumanoidPHC):
         self._cam_prev_char_pos[:] = char_root_pos
 
     def _update_marker(self):
-        if flags.show_traj:
+        self._marker_pos[:] = 1000
+
+        if self.flag_show_traj:
             motion_times = (
                 (self.progress_buf + 1) * self.dt + self._motion_start_times + self._motion_start_times_offset
             )  # + 1 for target.
             motion_res = self._get_state_from_motionlib_cache(
                 self._sampled_motion_ids, motion_times, self._global_offset
             )
-            (
-                root_pos,
-                root_rot,
-                dof_pos,
-                root_vel,
-                root_ang_vel,
-                dof_vel,
-                smpl_params,
-                limb_weights,
-                pose_aa,
-                ref_rb_pos,
-                ref_rb_rot,
-                ref_body_vel,
-                ref_body_ang_vel,
-            ) = (
-                motion_res["root_pos"],
-                motion_res["root_rot"],
-                motion_res["dof_pos"],
-                motion_res["root_vel"],
-                motion_res["root_ang_vel"],
-                motion_res["dof_vel"],
-                motion_res["motion_bodies"],
-                motion_res["motion_limb_weights"],
-                motion_res["motion_aa"],
-                motion_res["rg_pos"],
-                motion_res["rb_rot"],
-                motion_res["body_vel"],
-                motion_res["body_ang_vel"],
-            )
+            ref_rb_pos = motion_res["rg_pos"]  # yes, the rg_pos is rb_pos
 
-            self._marker_pos[:] = ref_rb_pos
-            # self._marker_rotation[..., self._track_bodies_id, :] = ref_rb_rot[..., self._track_bodies_id, :]
-
-            ## Only update the tracking points.
-            if flags.real_traj:
-                self._marker_pos[:] = 1000
-
+            # self._marker_pos[:] = ref_rb_pos
             self._marker_pos[..., self._track_bodies_id, :] = ref_rb_pos[..., self._track_bodies_id, :]
 
-        else:
-            self._marker_pos[:] = 1000
+            # self._marker_rotation[..., self._track_bodies_id, :] = ref_rb_rot[..., self._track_bodies_id, :]
 
         # ######### Heading debug #######
         # points = self.init_root_points()
@@ -571,4 +508,4 @@ class HumanoidRenderEnv(HumanoidPHC):
             motion_dict_dump[f"{humanoid_index}_{num_for_this_humanoid}"] = motion_dump
             num_for_this_humanoid += 1
         joblib.dump(motion_dict_dump, file_name)
-        self.state_record = defaultdict(list)
+        self.state_record.clear()
