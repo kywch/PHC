@@ -479,6 +479,10 @@ class HumanoidPHC:
         ### Motion/AMP-related
         self.seq_motions = False
         self._min_motion_len = 5  # env_config.get("min_length", -1)
+        
+        # NOTE: Some AMASS motion is over 7000 frames, and it substantially
+        # slows down the evaluation. So we limit the max length to 600.
+        self._max_motion_len = 600
 
         self._state_init = StateInit["Random"]
         self._hybrid_init_prob = 0.5
@@ -899,7 +903,7 @@ class HumanoidPHC:
                 "device": self.device,
                 "fix_height": FixHeightMode.full_fix,
                 "min_length": self._min_motion_len,
-                "max_length": -1,
+                "max_length": self._max_motion_len,
                 "im_eval": self.flag_im_eval,
                 "multi_thread": False,  # CHECK ME: need to config?
                 "smpl_type": self.humanoid_type,
