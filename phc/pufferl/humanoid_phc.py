@@ -903,7 +903,9 @@ class HumanoidPHC:
                 "device": self.device,
                 "fix_height": FixHeightMode.full_fix,
                 "min_length": self._min_motion_len,
-                "max_length": self._max_motion_len,
+                # NOTE: this max_length determines the training time, so using 300 for now
+                # TODO: find a way to evaluate full motion, probably not during training
+                "max_length": self.max_episode_length,
                 "im_eval": self.flag_im_eval,
                 "multi_thread": False,  # CHECK ME: need to config?
                 "smpl_type": self.humanoid_type,
@@ -924,7 +926,7 @@ class HumanoidPHC:
             gender_betas=self.humanoid_shapes.cpu(),
             limb_weights=self.humanoid_limb_and_weights.cpu(),
             random_sample=(not self.flag_test) and (not self.seq_motions),
-            max_len=-1 if self.flag_test else self.max_episode_length,
+            # max_len=-1 if self.flag_test else self.max_episode_length,  # NOTE: this is ignored in motion lib
             start_idx=self._motion_sample_start_idx,
         )
 
@@ -1598,7 +1600,7 @@ class HumanoidPHC:
                 limb_weights=self.humanoid_limb_and_weights.cpu(),
                 gender_betas=self.humanoid_shapes.cpu(),
                 random_sample=(not self.flag_test) and (not self.seq_motions),
-                max_len=-1 if self.flag_test else self.max_episode_length,
+                # max_len=-1 if self.flag_test else self.max_episode_length,  # NOTE: this is ignored in motion lib
             )
 
             time = self.progress_buf * self.dt + self._motion_start_times + self._motion_start_times_offset
