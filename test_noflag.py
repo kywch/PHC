@@ -153,7 +153,8 @@ TRAIN_SINGLE_PRIM = [
     "env=env_im",
     "robot=smpl_humanoid",
     # "env.motion_file=sample_data/amass_isaac_standing_upright_slim.pkl",
-    "env.motion_file=sample_data/amass_train_take6_upright.pkl",
+    # "env.motion_file=sample_data/amass_train_take6_upright.pkl",
+    "env.motion_file=sample_data/amass_train_11k_upright.pkl",
     # "env.num_envs=32",
     # "learning.params.config.horizon_length=32",
     # "learning.params.config.minibatch_size=1024",
@@ -163,6 +164,9 @@ TRAIN_SINGLE_PRIM = [
     # "learning.params.config.amp_minibatch_size=128",
     # "learning.params.config.save_frequency=100",
     # "device=cpu",
+    # Ablate discriminator
+    "learning.params.config.disc_coef=0",
+    "learning.params.config.disc_reward_w=0",
 ]
 
 EVALUATE_SINGLE_PRIM = [
