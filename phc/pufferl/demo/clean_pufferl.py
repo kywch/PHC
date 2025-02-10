@@ -163,6 +163,10 @@ def train(data):
     losses = data.losses
 
     with profile.train_misc:
+        # xcxc
+        data.policy.train()
+        update_obs_stats = getattr(data.policy.policy, "update_obs_stats", None)
+
         idxs = experience.sort_training_data()
         dones_np = experience.dones_np[idxs]
         values_np = experience.values_np[idxs]
@@ -188,6 +192,9 @@ def train(data):
                 ret = experience.b_returns[mb]
 
             with profile.train_forward:
+                if update_obs_stats is not None:
+                    update_obs_stats(obs.reshape(-1, *data.vecenv.single_observation_space.shape))
+
                 if experience.lstm_h is not None:
                     _, newlogprob, entropy, newvalue, lstm_state = data.policy(obs, state=lstm_state, action=atn)
                     lstm_state = (lstm_state[0].detach(), lstm_state[1].detach())

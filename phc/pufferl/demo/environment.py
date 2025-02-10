@@ -15,18 +15,19 @@ def make_env(**kwargs):
 
 
 class PHCPufferEnv(pufferlib.PufferEnv):
-    def __init__(self, cfg, device_type="cuda", device_id=0, headless=True, log_interval=128):
+    def __init__(self, cfg, device_type="cuda", device_id=0, headless=True, log_interval=32, clip_actions=True):
         self.env = HumanoidPHC(cfg, device_type=device_type, device_id=device_id, headless=headless)
         self.single_observation_space = self.env.single_observation_space
         self.single_action_space = self.env.single_action_space
         self.num_agents = self.num_envs = self.env.num_envs
         self.device = self.env.device
+        self.clip_actions = clip_actions
 
         # Check the buffer data types, match them to puffer
         buffers = pufferlib.namespace(
             observations=self.env.obs_buf,
             rewards=self.env.rew_buf,
-            terminals=self.env.reset_buf,
+            terminals=torch.zeros(self.num_agents, device=self.device, dtype=torch.bool),
             truncations=torch.zeros_like(self.env.reset_buf),
             masks=torch.ones_like(self.env.reset_buf),
             actions=torch.zeros(
@@ -36,6 +37,7 @@ class PHCPufferEnv(pufferlib.PufferEnv):
 
         super().__init__(buffers)
 
+        self.tick = 0
         self.log_interval = log_interval
         self.episode_returns = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         self.episode_lengths = torch.zeros(self.num_envs, dtype=torch.int32, device=self.device)
@@ -46,19 +48,26 @@ class PHCPufferEnv(pufferlib.PufferEnv):
 
     def reset(self, seed=None):
         self.env.reset()
+        self.tick = 0
         return self.observations, []
 
     def step(self, actions_np):
-        self.actions[:] = torch.from_numpy(actions_np)
+        actions = torch.from_numpy(actions_np)
+        if self.clip_actions:
+            actions = torch.clamp(actions, -1.0, 1.0)
+        self.actions[:] = actions
 
         # obs, reward, done are put into the buffers
         self.env.step(self.actions)
 
         # NOTE: rl-games reset done envs in the training script. Keeping this here for now.
         # TODO: Move this into the env
+        self.terminals[:] = self.env.reset_buf
         done_indices = torch.nonzero(self.terminals).squeeze(-1)
         if len(done_indices) > 0:
-            self.observations[done_indices] = self.env.reset(done_indices)[done_indices]
+            # reset() also updates self.env.obs_buf, which is self.observations
+            self.env.reset(done_indices)
+            # self.observations[done_indices] = self.env.reset(done_indices)[done_indices]
 
             self._infos["episode_return"] += self.episode_returns[done_indices].tolist()
             self._infos["episode_length"] += self.episode_lengths[done_indices].tolist()
@@ -69,7 +78,10 @@ class PHCPufferEnv(pufferlib.PufferEnv):
         self.episode_lengths += 1
 
         # TODO: self.env.extras has infos. Extract useful info?
-        info = self.mean_and_log()
+        info = []
+        self.tick += 1
+        if self.tick % self.log_interval == 0:
+            info = self.mean_and_log()
 
         return self.observations, self.rewards, self.terminals, self.truncations, info
 

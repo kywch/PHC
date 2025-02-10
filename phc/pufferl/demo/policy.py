@@ -64,7 +64,7 @@ class RunningNorm(nn.Module):
 
 
 class CleanRLPolicy(pufferlib.cleanrl.Policy):
-    def __init__(self, envs, hidden_size=64):
+    def __init__(self, envs, hidden_size=512):
         super().__init__(policy=None)  # Just to get the right init
         self.is_continuous = True
 
