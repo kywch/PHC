@@ -110,7 +110,11 @@ def main(cfg_hydra: DictConfig) -> None:
         cfg_train["device"] = cfg.device
         cfg_train["params"]["config"]["device"] = cfg.device
 
-    if cfg.epoch > 0:
+    if cfg.test and osp.exists(cfg.load_checkpoint):
+        cfg_train["params"]["load_checkpoint"] = True
+        cfg_train["params"]["load_path"] = cfg.load_checkpoint
+    
+    elif cfg.epoch > 0:
         cfg_train["params"]["load_checkpoint"] = True
         cfg_train["params"]["load_path"] = osp.join(
             cfg.output_path, cfg_train["params"]["config"]["name"] + "_" + str(cfg.epoch).zfill(8) + ".pth"
@@ -154,7 +158,8 @@ TRAIN_SINGLE_PRIM = [
     "robot=smpl_humanoid",
     # "env.motion_file=sample_data/amass_isaac_standing_upright_slim.pkl",
     # "env.motion_file=sample_data/amass_train_take6_upright.pkl",
-    "env.motion_file=sample_data/amass_train_11k_upright.pkl",
+    # "env.motion_file=sample_data/amass_train_11k_upright.pkl",
+    "env.motion_file=sample_data/dfaust_one_leg_jump.pkl",
     # "env.num_envs=32",
     # "learning.params.config.horizon_length=32",
     # "learning.params.config.minibatch_size=1024",
@@ -175,11 +180,13 @@ EVALUATE_SINGLE_PRIM = [
     "env=env_im",
     "robot=smpl_humanoid",
     # "env.motion_file=sample_data/amass_isaac_standing_upright_slim.pkl",
-    "env.motion_file=sample_data/amass_train_take6_upright.pkl",
+    # "env.motion_file=sample_data/amass_train_take6_upright.pkl",
+    "env.motion_file=sample_data/acting_poses.pkl",
     "epoch=-1",
     "test=True",
     "headless=False",
     "env.num_envs=4",
+    "load_checkpoint=Humanoid_acting_nodisc_1500.pth",
 ]
 
 if __name__ == "__main__":

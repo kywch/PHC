@@ -42,6 +42,7 @@ follow: False
 add_proj: False
 real_traj: False
 run_rlg: False
+load_checkpoint: null
 
 hydra:
   job:
