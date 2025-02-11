@@ -74,8 +74,8 @@ class PHCPufferEnv(pufferlib.PufferEnv):
             self.episode_returns[done_indices] = 0
             self.episode_lengths[done_indices] = 0
 
-        self.episode_returns += self.rewards
-        self.episode_lengths += 1
+        self.episode_returns[~self.terminals] += self.rewards[~self.terminals]
+        self.episode_lengths[~self.terminals] += 1
 
         # TODO: self.env.extras has infos. Extract useful info?
         info = []
