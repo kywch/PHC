@@ -16,7 +16,7 @@ from phc.norlg_learning.network import AMPBuilder, ModelAMPContinuous
 
 from debug_prim import seed_everything
 
-RUN_EVAL = False
+RUN_EVAL = True
 
 
 def set_np_formatting():
@@ -82,6 +82,7 @@ class Runner:
         elif cfg.test:
             if self.load_path != "Base":
                 agent.restore(self.load_path)
+            agent.task_env.toggle_eval_mode()  # fixes the motion heading
             agent.play()
 
         else:
@@ -181,12 +182,13 @@ EVALUATE_SINGLE_PRIM = [
     "robot=smpl_humanoid",
     # "env.motion_file=sample_data/amass_isaac_standing_upright_slim.pkl",
     # "env.motion_file=sample_data/amass_train_take6_upright.pkl",
-    "env.motion_file=sample_data/acting_poses.pkl",
+    # "env.motion_file=sample_data/acting_poses.pkl",
+    "env.motion_file=sample_data/dfaust_one_leg_jump.pkl",
     "epoch=-1",
     "test=True",
     "headless=False",
     "env.num_envs=4",
-    "load_checkpoint=Humanoid_acting_nodisc_1500.pth",
+    "load_checkpoint=hum2.pth",
 ]
 
 if __name__ == "__main__":
