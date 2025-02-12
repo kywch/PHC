@@ -109,7 +109,8 @@ class VecTaskWrapper:
 
         if obs is None:
             obs = self.task.obs_buf
-            rewards = self.task.rew_buf
+            # NOTE: simple rew normalization
+            rewards = self.task.rew_buf.clone() / 100.0
             dones = self.task.reset_buf
             infos = self.task.extras
         obs = self._clip_obs(obs)

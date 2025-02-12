@@ -85,7 +85,7 @@ class PHCAgent:
 
         # NOTE: PHC normalizes all inputs, values, amp_inputs.
         self.normalize_input = True  # self.config.get("normalize_input", False)
-        self.normalize_value = True  # self.config.get("normalize_value", False)
+        self.normalize_value = False  # self.config.get("normalize_value", False)
         self._normalize_amp_input = True  # config.get("normalize_amp_input", True)
         self._build_model()
 
