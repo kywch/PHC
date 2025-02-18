@@ -1,5 +1,6 @@
 import os
 import copy
+import random
 import os.path as osp
 
 import hydra
@@ -7,6 +8,7 @@ from omegaconf import DictConfig, OmegaConf
 from easydict import EasyDict
 import isaacgym
 
+import torch
 import numpy as np
 
 from phc.norlg_learning.env import create_rlgpu_env
@@ -14,9 +16,7 @@ from phc.norlg_learning.utils import DefaultAlgoObserver
 from phc.norlg_learning.phc_agent import PHCAgent
 from phc.norlg_learning.network import AMPBuilder, ModelAMPContinuous
 
-from debug_prim import seed_everything
-
-RUN_EVAL = True
+RUN_EVAL = False
 
 
 def set_np_formatting():
@@ -30,6 +30,23 @@ def set_np_formatting():
         threshold=10000,
         formatter=None,
     )
+
+
+def seed_everything(seed, strict=False):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    if strict:
+        # refer to https://docs.nvidia.com/cuda/cublas/index.html#cublasApi_reproducibility
+        os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
+        torch.use_deterministic_algorithms(True)  # raises runtime error if not deterministic
+        # torch.set_deterministic_debug_mode("warn")  # prints out warnings if not deterministic
 
 
 # Replace rlgames' torch_runner and factories
@@ -114,7 +131,7 @@ def main(cfg_hydra: DictConfig) -> None:
     if cfg.test and osp.exists(cfg.load_checkpoint):
         cfg_train["params"]["load_checkpoint"] = True
         cfg_train["params"]["load_path"] = cfg.load_checkpoint
-    
+
     elif cfg.epoch > 0:
         cfg_train["params"]["load_checkpoint"] = True
         cfg_train["params"]["load_path"] = osp.join(
@@ -160,7 +177,8 @@ TRAIN_SINGLE_PRIM = [
     # "env.motion_file=sample_data/amass_isaac_standing_upright_slim.pkl",
     # "env.motion_file=sample_data/amass_train_take6_upright.pkl",
     # "env.motion_file=sample_data/amass_train_11k_upright.pkl",
-    "env.motion_file=sample_data/dfaust_one_leg_jump.pkl",
+    "env.motion_file=sample_data/totalcapture_acting_poses.pkl",
+    # "env.motion_file=sample_data/dfaust_one_leg_jump.pkl",
     # "env.num_envs=32",
     # "learning.params.config.horizon_length=32",
     # "learning.params.config.minibatch_size=1024",
