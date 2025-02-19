@@ -191,6 +191,8 @@ TRAIN_SINGLE_PRIM = [
     # Ablate discriminator
     "learning.params.config.disc_coef=0",
     "learning.params.config.disc_reward_w=0",
+    # "learning.params.config.bounds_loss_coef=0",
+    "learning.params.config.normalize_input=False",
 ]
 
 EVALUATE_SINGLE_PRIM = [

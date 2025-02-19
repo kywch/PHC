@@ -84,7 +84,7 @@ class PHCAgent:
         self.network = config["network"]
 
         # NOTE: PHC normalizes all inputs, values, amp_inputs.
-        self.normalize_input = True  # self.config.get("normalize_input", False)
+        self.normalize_input = self.config.get("normalize_input", True)
         self.normalize_value = False  # self.config.get("normalize_value", False)
         self._normalize_amp_input = True  # config.get("normalize_amp_input", True)
         self._build_model()
@@ -386,8 +386,9 @@ class PHCAgent:
                 self.task_env.resample_motions()
 
             # Freeze running mean/std, so that the actor does not use the updated mean/std
-            self.running_mean_std_temp = deepcopy(self.running_mean_std)
-            self.running_mean_std_temp.freeze()
+            if self.normalize_input:
+                self.running_mean_std_temp = deepcopy(self.running_mean_std)
+                self.running_mean_std_temp.freeze()
 
             ### Collect data
             self.set_eval()
