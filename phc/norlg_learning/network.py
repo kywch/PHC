@@ -76,27 +76,6 @@ class AMPBuilder:
             ### Separate Critic
             self.critic_mlp = nn.Sequential(
                 layer_init(nn.Linear(actor_input_dim, 2048)),
-                # nn.LayerNorm(2048),
-                nn.ReLU(),
-                layer_init(nn.Linear(2048, 1024)),
-                # nn.LayerNorm(1024),
-                nn.ReLU(),
-                layer_init(nn.Linear(1024, 1024)),
-                # nn.LayerNorm(1024),
-                nn.ReLU(),
-                layer_init(nn.Linear(1024, 1024)),
-                # nn.LayerNorm(1024),
-                nn.ReLU(),
-                layer_init(nn.Linear(1024, 512)),
-                # nn.LayerNorm(512),
-                nn.ReLU(),
-                layer_init(nn.Linear(512, 512)),
-                # nn.LayerNorm(512),
-                nn.ReLU(),
-            )
-            """
-            self.critic_mlp = nn.Sequential(
-                layer_init(nn.Linear(actor_input_dim, 2048)),
                 # nn.SiLU(),
                 nn.ReLU(),
                 layer_init(nn.Linear(2048, 1536)),
@@ -115,7 +94,6 @@ class AMPBuilder:
                 # nn.SiLU(),
                 nn.ReLU(),
             )
-            """
             self.value = layer_init(nn.Linear(512, 1), std=0.01)
             # self.value = nn.Linear(hidden_output_dim, 1)
 
