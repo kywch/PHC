@@ -49,6 +49,8 @@ class AMPBuilder:
                 nn.SiLU(),
                 layer_init(nn.Linear(1024, 1024)),
                 nn.SiLU(),
+                layer_init(nn.Linear(1024, 1024)),
+                nn.SiLU(),
                 layer_init(nn.Linear(1024, hidden_output_dim)),
                 nn.SiLU(),
             )
@@ -91,6 +93,9 @@ class AMPBuilder:
                 nn.LayerNorm(2048),
                 nn.ReLU(),
                 layer_init(nn.Linear(2048, 1024)),
+                nn.LayerNorm(1024),
+                nn.ReLU(),
+                layer_init(nn.Linear(1024, 1024)),
                 nn.LayerNorm(1024),
                 nn.ReLU(),
                 layer_init(nn.Linear(1024, 1024)),
