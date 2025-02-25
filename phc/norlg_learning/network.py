@@ -45,21 +45,6 @@ class AMPBuilder:
             self.actor_mlp = nn.Sequential(
                 layer_init(nn.Linear(actor_input_dim, 2048)),
                 nn.SiLU(),
-                layer_init(nn.Linear(2048, 1024)),
-                nn.SiLU(),
-                layer_init(nn.Linear(1024, 1024)),
-                nn.SiLU(),
-                layer_init(nn.Linear(1024, 1024)),
-                nn.SiLU(),
-                layer_init(nn.Linear(1024, 512)),
-                nn.SiLU(),
-                layer_init(nn.Linear(512, hidden_output_dim)),
-                nn.SiLU(),
-            )
-            """
-            self.actor_mlp = nn.Sequential(
-                layer_init(nn.Linear(actor_input_dim, 2048)),
-                nn.SiLU(),
                 layer_init(nn.Linear(2048, 1536)),
                 nn.SiLU(),
                 layer_init(nn.Linear(1536, 1024)),
@@ -71,7 +56,6 @@ class AMPBuilder:
                 layer_init(nn.Linear(512, hidden_output_dim)),
                 nn.SiLU(),
             )
-            """
             self.mu = nn.Linear(hidden_output_dim, actions_num)
             # self.mu_act = nn.Identity()  # Remove this
 
