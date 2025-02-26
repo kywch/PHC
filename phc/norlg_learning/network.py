@@ -77,24 +77,30 @@ class AMPBuilder:
             self.critic_mlp = nn.Sequential(
                 layer_init(nn.Linear(actor_input_dim, 2048)),
                 # nn.SiLU(),
+                nn.LayerNorm(2048),
                 nn.ReLU(),
                 layer_init(nn.Linear(2048, 1536)),
                 # nn.SiLU(),
+                nn.LayerNorm(1536),
                 nn.ReLU(),
                 layer_init(nn.Linear(1536, 1024)),
                 # nn.SiLU(),
+                nn.LayerNorm(1024),
                 nn.ReLU(),
                 layer_init(nn.Linear(1024, 1024)),
                 # nn.SiLU(),
+                nn.LayerNorm(1024),
                 nn.ReLU(),
                 layer_init(nn.Linear(1024, 512)),
                 # nn.SiLU(),
+                nn.LayerNorm(512),
                 nn.ReLU(),
                 layer_init(nn.Linear(512, hidden_output_dim)),
                 # nn.SiLU(),
+                nn.LayerNorm(hidden_output_dim),
                 nn.ReLU(),
             )
-            self.value = layer_init(nn.Linear(512, 1), std=0.01)
+            self.value = layer_init(nn.Linear(hidden_output_dim, 1), std=0.01)
             # self.value = nn.Linear(hidden_output_dim, 1)
 
             ### Discriminator
