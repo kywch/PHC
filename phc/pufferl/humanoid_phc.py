@@ -496,7 +496,7 @@ class HumanoidPHC:
         # NOTE: Auto PMCP updates the motion sampling prob during training
         # See IMAmpAgent.update_training_data() in the eval function
         self.auto_pmcp = False
-        self.auto_pmcp_soft = True
+        self.auto_pmcp_soft = env_config.get("auto_pmcp_soft", False)
 
         ### Reward-related
         self.use_power_reward = True
